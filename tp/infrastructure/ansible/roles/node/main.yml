@@ -1,0 +1,10 @@
+---
+- name: "Update repositories cache"
+  ansible.builtin.apt:
+    update_cache: true
+- name: "Install nodejs"
+  ansible.builtin.apt:
+    name: nodejs
+- name: "Install npm"
+  ansible.builtin.apt:
+    name: npm

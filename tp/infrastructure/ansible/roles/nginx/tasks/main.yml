@@ -1,0 +1,11 @@
+---
+- name: "Install nginx"
+  ansible.builtin.apt:
+    name: nginx
+    update_cache: true
+- name: "Install nginx vhost"
+  ansible.builtin.template:
+    src: ./templates/default.conf.j2
+    dest: /etc/nginx/sites-available/default
+    mode: "0600"
+  notify: Reload-nginx
