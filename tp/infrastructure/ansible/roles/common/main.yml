@@ -1,8 +1,0 @@
-- name: Update apt repository
-  apt:
-    update_cache: yes
-
-- name: Install common packages
-  apt:
-    name: [git, curl]
-    state: present
