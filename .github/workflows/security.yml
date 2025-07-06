@@ -50,16 +50,16 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 🔍 Initialize CodeQL
-        uses: github/codeql-action/init@v2
+        uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
           queries: +security-and-quality
 
       - name: 🏗️ Autobuild
-        uses: github/codeql-action/autobuild@v2
+        uses: github/codeql-action/autobuild@v3
 
       - name: 🔍 Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v2
+        uses: github/codeql-action/analyze@v3
         with:
           category: "/language:${{matrix.language}}"
 
@@ -104,7 +104,7 @@ jobs:
 
       - name: 📤 Upload Snyk results
         if: always()
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: snyk.sarif
         continue-on-error: true
@@ -165,7 +165,7 @@ jobs:
 
       - name: 📤 Upload Trivy scan results
         if: always()
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: |
             trivy-container.sarif
@@ -182,7 +182,7 @@ jobs:
 
       - name: 📤 Upload Hadolint results
         if: always()
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: hadolint.sarif
 
@@ -252,7 +252,7 @@ jobs:
 
       - name: 📤 Upload Checkov results
         if: always()
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: checkov.sarif
 
