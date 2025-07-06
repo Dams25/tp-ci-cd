@@ -3,7 +3,7 @@
 # ==============================================================================
 
 # Stage 1: Build & Test
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 # Métadonnées
 LABEL maintainer="DevOps Team" \
@@ -34,7 +34,7 @@ RUN rm -rf tests/ docker/ infrastructure/ \
     && rm -f *.md jest.config.js
 
 # Stage 2: Tests (optionnel, peut être désactivé en production)
-FROM node:20-alpine AS tester
+FROM node:24-alpine AS tester
 
 WORKDIR /app
 
@@ -49,7 +49,7 @@ COPY . .
 RUN npm test
 
 # Stage 3: Runtime Production
-FROM node:20-alpine AS production
+FROM node:24-alpine AS production
 
 # Installation d'outils essentiels pour la production
 RUN apk add --no-cache \
