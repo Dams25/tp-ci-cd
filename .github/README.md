@@ -210,9 +210,9 @@ Generate changelog: true
 Ajoutez ces badges à votre README.md :
 
 ```markdown
-![CI/CD Pipeline](https://github.com/YOUR-USERNAME/YOUR-REPO/workflows/🚀%20CI/CD%20Pipeline/badge.svg)
-![Security Scanning](https://github.com/YOUR-USERNAME/YOUR-REPO/workflows/🛡️%20Security%20Scanning/badge.svg)
-![Release Pipeline](https://github.com/YOUR-USERNAME/YOUR-REPO/workflows/🎉%20Release%20Pipeline/badge.svg)
+![CI/CD Pipeline](https://github.com/Dams25/tp-ci-cd/workflows/🚀%20CI/CD%20Pipeline/badge.svg)
+![Security Scanning](https://github.com/Dams25/tp-ci-cd/workflows/🛡️%20Security%20Scanning/badge.svg)
+![Release Pipeline](https://github.com/Dams25/tp-ci-cd/workflows/🎉%20Release%20Pipeline/badge.svg)
 ```
 
 ### 🔍 Surveillance continue
