@@ -1,0 +1,78 @@
+# ============================================
+# TEMPLATE: Rapport de santé détaillé
+# DESCRIPTION: Rapport complet des tests de santé
+# ============================================
+
+RAPPORT DE SANTÉ - {{ app_name | upper }}
+=========================================
+
+📊 **Résumé Exécutif**
+- Score de santé global: {{ health_score }}%
+- Timestamp: {{ ansible_date_time.iso8601 }}
+- Durée des tests: {{ total_duration }}s
+- Statut: {{ 'SUCCÈS' if health_score|float >= 80 else 'ÉCHEC' }}
+
+🖥️  **Ressources Système**
+- CPU: {{ system_resources.cpu }}%
+- Mémoire: {{ system_resources.memory }}%
+- Disque: {{ system_resources.disk }}%
+
+🐳 **Containers Docker**
+- Nombre de containers: {{ containers_count }}
+- Statut: Tous en cours d'exécution
+{% for container in containers_info %}
+- {{ container.Name }}: {{ container.State }}
+{% endfor %}
+
+🌐 **Application Web**
+- Port: {{ deployment.app_port | default(3000) }}
+- Temps de réponse: {{ response_time }}s
+- Endpoint santé: ✅ ACCESSIBLE
+- Tests fonctionnels: ✅ RÉUSSIS
+
+🗄️  **Base de Données**
+- MongoDB: ✅ CONNECTÉE
+- Performance: {{ mongo_performance_test.stdout if mongo_performance_test is defined else 'N/A' }}
+- Espace stockage: {{ mongo_storage_test.stdout if mongo_storage_test is defined else 'N/A' }}
+
+⚡ **Tests de Charge (si activés)**
+{% if load_test_success_rate is defined %}
+- Taux de succès: {{ load_test_success_rate }}%
+- Requêtes simultanées: {{ health_checks.load_test.concurrent_requests | default(10) }}
+{% else %}
+- Tests de charge: NON ACTIVÉS
+{% endif %}
+
+🔍 **Détails Techniques**
+- Version application: {{ app_version }}
+- Environnement: {{ app_environment }}
+- Stratégie déploiement: {{ deployment.strategy }}
+- Image Docker: {{ docker.image_name }}:{{ app_version }}
+
+📈 **Recommandations**
+{% if health_score|float < 70 %}
+⚠️  CRITIQUE - Score de santé très faible:
+- Vérifier immédiatement les logs d'application
+- Contrôler les ressources système
+- Envisager un rollback si nécessaire
+{% elif health_score|float < 80 %}
+⚠️  ATTENTION - Score de santé insuffisant:
+- Surveiller les métriques de près
+- Planifier une maintenance préventive
+- Analyser les goulots d'étranglement
+{% else %}
+✅ EXCELLENT - Application en bonne santé:
+- Maintenir la surveillance
+- Continuer les bonnes pratiques
+- Envisager des optimisations
+{% endif %}
+
+📞 **Contacts d'urgence**
+- Équipe DevOps: {{ notifications.emergency_contact | default('Non configuré') }}
+- Slack: {{ notifications.slack.channel | default('Non configuré') }}
+- Email: {{ notifications.email.recipients | join(', ') if notifications.email.recipients is defined else 'Non configuré' }}
+
+---
+Rapport généré automatiquement par Ansible
+Serveur: {{ ansible_hostname }}
+Date: {{ ansible_date_time.iso8601 }}

@@ -1,0 +1,90 @@
+# ==============================================================================
+# DOCKER-COMPOSE PRODUCTION SIMPLIFIÉ - TO-DO LIST APPLICATION
+# ==============================================================================
+
+services:
+  # ==========================================
+  # APPLICATION NODE.JS TO-DO LIST
+  # ==========================================
+  todolist-app:
+    build:
+      context: ../../
+      dockerfile: deployment/docker/Dockerfile
+      target: production
+    container_name: todolist-app-prod
+    restart: unless-stopped
+    
+    # Variables d'environnement
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - MONGODB_URI=mongodb://mongodb:27017/todolist
+      - SESSION_SECRET=${SESSION_SECRET:-default-secret-change-in-production}
+      - START_MESSAGE=Production TO-DO App Started
+      
+    # Exposition du port
+    ports:
+      - "3000:3000"
+      
+    # Dépendances
+    depends_on:
+      mongodb:
+        condition: service_healthy
+        
+    # Healthcheck application
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+      
+    # Configuration des logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================
+  # BASE DE DONNÉES MONGODB
+  # ==========================================
+  mongodb:
+    image: mongo:7-jammy
+    container_name: todolist-mongodb-prod
+    restart: unless-stopped
+    
+    # Variables d'environnement
+    environment:
+      - MONGO_INITDB_DATABASE=todolist
+      
+    # Exposition du port (uniquement en interne)
+    expose:
+      - "27017"
+      
+    # Persistance des données
+    volumes:
+      - mongodb-data:/data/db
+      
+    # Healthcheck MongoDB
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+      
+    # Configuration des logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ==============================================================================
+# VOLUMES PERSISTANTS
+# ==============================================================================
+volumes:
+  # Données MongoDB persistantes
+  mongodb-data:
+    driver: local

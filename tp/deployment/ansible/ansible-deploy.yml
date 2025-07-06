@@ -1,0 +1,196 @@
+# ==============================================================================
+# PLAYBOOK ANSIBLE - DÉPLOIEMENT TO-DO LIST PRODUCTION
+# ==============================================================================
+---
+- name: Déploiement Application TO-DO List avec Docker Compose
+  hosts: production_servers
+  become: yes
+  vars:
+    app_name: todolist-prod
+    app_user: todolist
+    app_directory: /opt/todolist
+    backup_directory: /opt/backups/todolist
+    
+  tasks:
+    # ==========================================
+    # PRÉPARATION DE L'ENVIRONNEMENT
+    # ==========================================
+    - name: Créer l'utilisateur application
+      user:
+        name: "{{ app_user }}"
+        system: yes
+        shell: /bin/bash
+        home: "{{ app_directory }}"
+        create_home: yes
+      
+    - name: Créer les répertoires nécessaires
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0755'
+      loop:
+        - "{{ app_directory }}"
+        - "{{ app_directory }}/data"
+        - "{{ app_directory }}/data/mongodb"
+        - "{{ app_directory }}/nginx"
+        - "{{ backup_directory }}"
+        - "{{ app_directory }}/backups"
+    
+    # ==========================================
+    # INSTALLATION DES DÉPENDANCES
+    # ==========================================
+    - name: Installer Docker et Docker Compose
+      package:
+        name: 
+          - docker.io
+          - docker-compose
+        state: present
+      
+    - name: Démarrer et activer Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+        
+    - name: Ajouter l'utilisateur au groupe docker
+      user:
+        name: "{{ app_user }}"
+        groups: docker
+        append: yes
+    
+    # ==========================================
+    # DÉPLOIEMENT DES FICHIERS
+    # ==========================================
+    - name: Copier les fichiers de l'application
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ app_directory }}/{{ item.dest }}"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "{{ item.mode | default('0644') }}"
+      loop:
+        - { src: "docker-compose.yml", dest: "docker-compose.yml" }
+        - { src: "Dockerfile", dest: "Dockerfile" }
+        - { src: ".dockerignore", dest: ".dockerignore" }
+        - { src: "mongo-init.js", dest: "mongo-init.js" }
+        - { src: "manage-docker.sh", dest: "manage-docker.sh", mode: "0755" }
+        - { src: "nginx/nginx.conf", dest: "nginx/nginx.conf" }
+      
+    - name: Copier le code source de l'application
+      synchronize:
+        src: ./
+        dest: "{{ app_directory }}/"
+        exclude:
+          - .git/
+          - node_modules/
+          - tests/
+          - .env
+          - data/
+        owner: no
+        group: no
+        rsync_opts:
+          - "--chown={{ app_user }}:{{ app_user }}"
+    
+    # ==========================================
+    # CONFIGURATION
+    # ==========================================
+    - name: Créer le fichier .env depuis le template
+      template:
+        src: .env.j2
+        dest: "{{ app_directory }}/.env"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0600'
+      vars:
+        mongodb_password: "{{ vault_mongodb_password }}"
+        session_secret: "{{ vault_session_secret }}"
+        encryption_key: "{{ vault_encryption_key }}"
+    
+    # ==========================================
+    # SAUVEGARDE AVANT DÉPLOIEMENT
+    # ==========================================
+    - name: Créer une sauvegarde avant déploiement
+      shell: |
+        if docker ps | grep -q todolist-mongodb-prod; then
+          {{ app_directory }}/manage-docker.sh backup
+        fi
+      become_user: "{{ app_user }}"
+      ignore_errors: yes
+    
+    # ==========================================
+    # DÉPLOIEMENT
+    # ==========================================
+    - name: Arrêter l'ancienne version
+      shell: "{{ app_directory }}/manage-docker.sh stop"
+      become_user: "{{ app_user }}"
+      ignore_errors: yes
+      
+    - name: Construire et démarrer l'application
+      shell: "{{ app_directory }}/manage-docker.sh start"
+      become_user: "{{ app_user }}"
+      args:
+        chdir: "{{ app_directory }}"
+    
+    # ==========================================
+    # VÉRIFICATIONS POST-DÉPLOIEMENT
+    # ==========================================
+    - name: Attendre que l'application soit prête
+      wait_for:
+        port: 3000
+        host: localhost
+        delay: 30
+        timeout: 120
+        
+    - name: Vérifier le health check
+      uri:
+        url: http://localhost:3000/health
+        method: GET
+        status_code: 200
+      retries: 5
+      delay: 10
+      
+    - name: Afficher le statut des services
+      shell: "{{ app_directory }}/manage-docker.sh status"
+      become_user: "{{ app_user }}"
+      register: service_status
+      
+    - name: Afficher le résultat du déploiement
+      debug:
+        msg: "{{ service_status.stdout_lines }}"
+    
+    # ==========================================
+    # CONFIGURATION DU MONITORING
+    # ==========================================
+    - name: Créer le script de monitoring cron
+      template:
+        src: monitoring.sh.j2
+        dest: "{{ app_directory }}/monitoring.sh"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: '0755'
+        
+    - name: Configurer la tâche cron pour le monitoring
+      cron:
+        name: "TO-DO List Health Check"
+        minute: "*/5"
+        job: "{{ app_directory }}/monitoring.sh"
+        user: "{{ app_user }}"
+    
+    # ==========================================
+    # CONFIGURATION DE LA ROTATION DES LOGS
+    # ==========================================
+    - name: Configurer logrotate pour Docker
+      template:
+        src: logrotate.conf.j2
+        dest: /etc/logrotate.d/todolist-docker
+        mode: '0644'
+      
+  # ==========================================
+  # HANDLERS
+  # ==========================================
+  handlers:
+    - name: restart application
+      shell: "{{ app_directory }}/manage-docker.sh restart"
+      become_user: "{{ app_user }}"

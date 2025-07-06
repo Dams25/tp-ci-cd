@@ -1,0 +1,231 @@
+#!/bin/bash
+
+# ============================================
+# SCRIPT: Rollback automatique
+# DESCRIPTION: Restauration rapide vers version précédente
+# VERSION: 1.0
+# ============================================
+
+set -euo pipefail
+
+# Configuration
+APP_DIR="{{ app_directory }}"
+APP_NAME="{{ app_name }}"
+ROLLBACK_TO="${1:-{{ previous_version | default('latest') }}}"
+REASON="${2:-Manual rollback}"
+LOG_FILE="$APP_DIR/logs/rollback-$(date +%s).log"
+
+# Fonctions utilitaires
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+}
+
+error() {
+    log "ERROR: $1" >&2
+    exit 1
+}
+
+# Fonction de rollback
+perform_rollback() {
+    log "🔄 Début du rollback vers $ROLLBACK_TO - Raison: $REASON"
+    
+    # 1. Sauvegarde d'urgence de l'état actuel
+    log "💾 Sauvegarde d'urgence de l'état actuel"
+    backup_dir="$APP_DIR/backup/emergency/$(date +%s)"
+    mkdir -p "$backup_dir"
+    
+    # Sauvegarde de la base de données
+    if docker-compose -f "$APP_DIR/docker-compose.yml" ps | grep -q mongo; then
+        docker exec $(docker-compose -f "$APP_DIR/docker-compose.yml" ps -q mongo) \
+            mongodump --db {{ secrets.mongodb.database }} --archive | \
+            gzip > "$backup_dir/mongodb-pre-rollback.gz"
+        log "✅ Base de données sauvegardée"
+    fi
+    
+    # Sauvegarde des configurations
+    cp "$APP_DIR/.env" "$backup_dir/" 2>/dev/null || true
+    cp "$APP_DIR/docker-compose.yml" "$backup_dir/" 2>/dev/null || true
+    
+    # 2. Arrêt des services actuels
+    log "⏹️ Arrêt des services actuels"
+    cd "$APP_DIR"
+    docker-compose down --timeout 30 || true
+    
+    # 3. Restauration de la version précédente
+    log "🔙 Restauration vers la version $ROLLBACK_TO"
+    
+    # Recherche du point de restauration
+    restore_point="$APP_DIR/backup/restore-point-$ROLLBACK_TO.json"
+    if [[ -f "$restore_point" ]]; then
+        log "📋 Point de restauration trouvé: $restore_point"
+        
+        # Restauration des configurations
+        if [[ -f "$APP_DIR/backup/env/.env-$ROLLBACK_TO" ]]; then
+            cp "$APP_DIR/backup/env/.env-$ROLLBACK_TO" "$APP_DIR/.env"
+            log "✅ Variables d'environnement restaurées"
+        fi
+        
+        if [[ -f "$APP_DIR/backup/compose/docker-compose-$ROLLBACK_TO.yml" ]]; then
+            cp "$APP_DIR/backup/compose/docker-compose-$ROLLBACK_TO.yml" "$APP_DIR/docker-compose.yml"
+            log "✅ Configuration Docker Compose restaurée"
+        fi
+    else
+        log "⚠️ Point de restauration non trouvé, utilisation de la dernière sauvegarde disponible"
+        latest_env=$(find "$APP_DIR/backup/env" -name ".env-*" -type f | sort | tail -1)
+        latest_compose=$(find "$APP_DIR/backup/compose" -name "docker-compose-*.yml" -type f | sort | tail -1)
+        
+        [[ -f "$latest_env" ]] && cp "$latest_env" "$APP_DIR/.env"
+        [[ -f "$latest_compose" ]] && cp "$latest_compose" "$APP_DIR/docker-compose.yml"
+    fi
+    
+    # 4. Vérification de l'image Docker
+    log "🐳 Vérification de l'image Docker ${{ docker.image_name }}:$ROLLBACK_TO"
+    if ! docker images | grep -q "${{ docker.image_name }}.*$ROLLBACK_TO"; then
+        log "⚠️ Image $ROLLBACK_TO non trouvée localement, tentative de pull"
+        docker pull "${{ docker.image_name }}:$ROLLBACK_TO" || {
+            log "❌ Impossible de récupérer l'image $ROLLBACK_TO"
+            log "🔍 Images disponibles:"
+            docker images ${{ docker.image_name }} | tee -a "$LOG_FILE"
+            
+            # Utilisation de la dernière image disponible
+            latest_image=$(docker images ${{ docker.image_name }} --format "table {{.Tag}}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+            if [[ -n "$latest_image" ]]; then
+                log "🔄 Utilisation de l'image disponible: $latest_image"
+                ROLLBACK_TO="$latest_image"
+            else
+                error "Aucune image de rollback disponible"
+            fi
+        }
+    fi
+    
+    # 5. Mise à jour du docker-compose avec la bonne version
+    sed -i "s/{{ docker.image_name }}:.*/{{ docker.image_name }}:$ROLLBACK_TO/" "$APP_DIR/docker-compose.yml"
+    
+    # 6. Redémarrage des services
+    log "🚀 Redémarrage des services avec la version $ROLLBACK_TO"
+    docker-compose up -d --force-recreate
+    
+    # 7. Vérification de santé
+    log "🏥 Vérification de santé post-rollback"
+    sleep 10
+    
+    max_attempts=10
+    attempt=1
+    while [[ $attempt -le $max_attempts ]]; do
+        if curl -sf "http://localhost:{{ deployment.app_port | default(3000) }}/health" >/dev/null 2>&1; then
+            log "✅ Service fonctionnel après $attempt tentative(s)"
+            break
+        fi
+        
+        log "⏳ Tentative $attempt/$max_attempts échouée, nouvelle tentative dans 10s"
+        sleep 10
+        ((attempt++))
+    done
+    
+    if [[ $attempt -gt $max_attempts ]]; then
+        error "❌ Le service ne répond pas après rollback"
+    fi
+    
+    # 8. Rapport de rollback
+    log "📊 Génération du rapport de rollback"
+    cat > "$APP_DIR/logs/rollback-report-$(date +%s).txt" << EOF
+RAPPORT DE ROLLBACK
+==================
+
+Date: $(date)
+Version source: {{ app_version }}
+Version cible: $ROLLBACK_TO
+Raison: $REASON
+Statut: SUCCÈS
+
+Détails:
+- Sauvegarde d'urgence: $backup_dir
+- Log de rollback: $LOG_FILE
+- Services redémarrés: $(docker-compose ps --services)
+- Health check: SUCCÈS
+
+Actions recommandées:
+1. Vérifier le fonctionnement de l'application
+2. Analyser la cause du problème original
+3. Planifier un nouveau déploiement après correction
+EOF
+
+    log "🎉 Rollback terminé avec succès vers la version $ROLLBACK_TO"
+}
+
+# Fonction de notification
+send_notification() {
+    local status="$1"
+    local message="$2"
+    
+    {% if notifications.slack.enabled | default(false) %}
+    # Notification Slack
+    curl -X POST "{{ notifications.slack.webhook_url }}" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"channel\": \"{{ notifications.slack.channel | default('#deployments') }}\",
+            \"username\": \"Rollback Bot\",
+            \"icon_emoji\": \":rewind:\",
+            \"text\": \"🔄 **Rollback $status**\\n\\n📋 **Détails:**\\n• Application: {{ app_name }}\\n• Version: {{ app_version }} → $ROLLBACK_TO\\n• Raison: $REASON\\n• Serveur: {{ ansible_host }}\\n• Timestamp: $(date)\\n\\n$message\"
+        }" 2>/dev/null || true
+    {% endif %}
+    
+    {% if notifications.email.enabled | default(false) %}
+    # Notification email
+    {
+        echo "Subject: [{{ app_environment | upper }}] Rollback {{ app_name }} - $status"
+        echo "To: {{ notifications.email.recipients | join(',') }}"
+        echo ""
+        echo "Le rollback de {{ app_name }} s'est terminé avec le statut: $status"
+        echo ""
+        echo "Détails:"
+        echo "- Version source: {{ app_version }}"
+        echo "- Version cible: $ROLLBACK_TO"
+        echo "- Raison: $REASON"
+        echo "- Serveur: {{ ansible_host }}"
+        echo "- Timestamp: $(date)"
+        echo ""
+        echo "$message"
+        echo ""
+        echo "Log complet disponible: $LOG_FILE"
+    } | sendmail {{ notifications.email.recipients | join(' ') }} 2>/dev/null || true
+    {% endif %}
+}
+
+# Gestion des erreurs
+trap 'send_notification "ÉCHEC" "Le rollback a échoué. Vérifiez les logs: $LOG_FILE"' ERR
+
+# Point d'entrée principal
+main() {
+    log "🔄 Début du script de rollback"
+    
+    # Vérifications préliminaires
+    [[ -d "$APP_DIR" ]] || error "Répertoire d'application non trouvé: $APP_DIR"
+    [[ -f "$APP_DIR/docker-compose.yml" ]] || error "Fichier docker-compose.yml non trouvé"
+    
+    command -v docker >/dev/null || error "Docker non installé"
+    command -v docker-compose >/dev/null || error "Docker Compose non installé"
+    
+    # Exécution du rollback
+    perform_rollback
+    
+    # Notification de succès
+    send_notification "SUCCÈS" "Le rollback vers la version $ROLLBACK_TO s'est terminé avec succès."
+    
+    log "🎉 Script de rollback terminé avec succès"
+}
+
+# Vérification des arguments
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    case "${1:-}" in
+        -h|--help)
+            echo "Usage: $0 [VERSION] [REASON]"
+            echo "  VERSION: Version vers laquelle effectuer le rollback (défaut: dernière disponible)"
+            echo "  REASON:  Raison du rollback (défaut: 'Manual rollback')"
+            exit 0
+            ;;
+        *)
+            main "$@"
+            ;;
+    esac
+fi

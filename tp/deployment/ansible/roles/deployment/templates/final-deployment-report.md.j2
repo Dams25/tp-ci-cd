@@ -1,0 +1,154 @@
+# ============================================
+# TEMPLATE: Rapport de déploiement final
+# DESCRIPTION: Résumé complet du déploiement
+# ============================================
+
+# 📋 Rapport de Déploiement - {{ deployment_summary.version }}
+
+## 📊 Résumé Exécutif
+
+- **Application** : {{ app_name }}
+- **Version** : {{ deployment_summary.version }}
+- **Environnement** : {{ deployment_summary.environment }}
+- **Stratégie** : {{ deployment_summary.strategy }}
+- **Timestamp** : {{ deployment_summary.timestamp }}
+- **Durée totale** : {{ deployment_summary.duration }}s
+- **Statut** : ✅ **SUCCÈS**
+
+## 🚀 Détails du Déploiement
+
+### Étapes Exécutées
+1. ✅ **Pré-déploiement** - Sauvegarde et validation
+2. ✅ **Transfert fichiers** - Synchronisation complète
+3. ✅ **Gestion secrets** - Configuration sécurisée
+4. ✅ **Build Docker** - Image optimisée créée
+5. ✅ **Déploiement services** - {{ deployment_summary.strategy }} réussi
+6. ✅ **Tests de santé** - Validation complète
+7. ✅ **Post-déploiement** - Nettoyage et monitoring
+
+### Configuration Déployée
+- **Port application** : {{ deployment.app_port | default(3000) }}
+- **Base de données** : MongoDB {{ mongodb.version | default('5.0') }}
+- **Image Docker** : {{ docker.image_name }}:{{ deployment_summary.version }}
+- **Restart policy** : {{ docker.restart_policy | default('unless-stopped') }}
+
+## 🔒 Sécurité
+
+- ✅ Secrets chiffrés avec Ansible Vault
+- ✅ Certificats SSL configurés
+- ✅ Firewall UFW actif
+- ✅ Permissions restrictives appliquées
+- ✅ Variables d'environnement sécurisées
+
+## 🏥 Tests de Santé
+
+- ✅ Application accessible sur port {{ deployment.app_port | default(3000) }}
+- ✅ Base de données MongoDB opérationnelle
+- ✅ Tests fonctionnels API réussis
+- ✅ Connectivité inter-services validée
+- ✅ Performance dans les seuils acceptables
+
+## 📊 Monitoring
+
+{% if monitoring.enabled | default(false) %}
+- ✅ **Prometheus** : http://{{ ansible_host }}:{{ monitoring.prometheus_port | default(9090) }}
+- ✅ **Grafana** : http://{{ ansible_host }}:{{ monitoring.grafana_port | default(3001) }}
+- ✅ **Alertes** : Configurées sur Slack et email
+{% else %}
+- ❌ **Monitoring** : Non activé
+{% endif %}
+
+## 🔄 Informations de Rollback
+
+- **Version précédente sauvegardée** : {{ previous_version | default('N/A') }}
+- **Point de restauration** : `/opt/todolist/backup/restore-point-{{ deployment_summary.version }}.json`
+- **Commande rollback** : `make rollback ROLLBACK_TO={{ previous_version | default('previous') }}`
+
+## 📁 Sauvegardes
+
+- **Base de données** : `/opt/todolist/backup/mongodb/`
+- **Configurations** : `/opt/todolist/backup/env/`
+- **Images Docker** : `/opt/todolist/backup/images/`
+- **Snapshot complet** : `/opt/todolist/backup/snapshots/`
+
+## 🌐 Accès à l'Application
+
+- **URL principale** : http://{{ ansible_host }}:{{ deployment.app_port | default(3000) }}
+- **Health check** : http://{{ ansible_host }}:{{ deployment.app_port | default(3000) }}/health
+- **API** : http://{{ ansible_host }}:{{ deployment.app_port | default(3000) }}/api/
+{% if nginx.ssl_enabled | default(false) %}
+- **HTTPS** : https://{{ ansible_host }}
+{% endif %}
+
+## 📈 Métriques de Performance
+
+- **Temps de déploiement** : {{ deployment_summary.duration }}s
+- **Temps de build Docker** : {{ build_duration | default('N/A') }}s
+- **Temps de tests** : {{ test_duration | default('N/A') }}s
+- **Score de santé final** : {{ health_score | default('N/A') }}%
+
+## 🧹 Nettoyage Effectué
+
+- **Images Docker supprimées** : {{ cleanup_summary.images_removed | default(0) }}
+- **Containers supprimés** : {{ cleanup_summary.containers_removed | default(0) }}
+- **Volumes nettoyés** : {{ cleanup_summary.volumes_removed | default(0) }}
+- **Cache de build purgé** : ✅
+
+## 📢 Notifications
+
+{% if notifications.slack.enabled | default(false) %}
+- ✅ **Slack** : Notification envoyée sur {{ notifications.slack.channel | default('#deployments') }}
+{% endif %}
+{% if notifications.email.enabled | default(false) %}
+- ✅ **Email** : Notification envoyée à {{ notifications.email.recipients | join(', ') }}
+{% endif %}
+
+## 🔧 Actions Recommandées
+
+### Immédiatement
+1. Vérifier manuellement l'accès à l'application
+2. Surveiller les logs pendant 30 minutes
+3. Valider les fonctionnalités critiques
+4. Informer les équipes utilisatrices
+
+### Dans les 24h
+1. Analyser les métriques de performance
+2. Vérifier les sauvegardes automatiques
+3. Contrôler les alertes de monitoring
+4. Documenter les éventuels ajustements
+
+### Maintenance préventive
+1. Planifier la prochaine mise à jour
+2. Revoir les seuils d'alerte si nécessaire
+3. Optimiser les performances si requis
+4. Mettre à jour la documentation
+
+## 📞 Support
+
+- **Logs de déploiement** : `/opt/todolist/logs/`
+- **Documentation** : `/opt/todolist/docs/`
+- **Scripts de gestion** : `/opt/todolist/scripts/`
+- **Contact DevOps** : {{ notifications.emergency_contact | default('Équipe DevOps') }}
+
+## 🎯 Résumé des Changements
+
+Cette version {{ deployment_summary.version }} inclut :
+{% if changelog is defined %}
+{% for change in changelog %}
+- {{ change }}
+{% endfor %}
+{% else %}
+- Mise à jour standard des services
+- Corrections de sécurité appliquées
+- Optimisations de performance
+{% endif %}
+
+---
+
+**Déploiement réalisé par** : Ansible Automation  
+**Serveur cible** : {{ ansible_host }} ({{ ansible_hostname }})  
+**Date de génération** : {{ ansible_date_time.iso8601 }}  
+**Version du playbook** : 1.0
+
+> 🎉 **Déploiement terminé avec succès !**  
+> L'application {{ app_name }} version {{ deployment_summary.version }} est maintenant en production.

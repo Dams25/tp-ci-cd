@@ -1,0 +1,143 @@
+# ==============================================================================
+# GITIGNORE RACINE - PROJET TODOLIST CI/CD COMPLET
+# ==============================================================================
+
+# ==============================================================================
+# SÉCURITÉ CRITIQUE - SECRETS ET CREDENTIALS
+# ==============================================================================
+
+# Variables d'environnement
+.env
+.env.*
+!.env.example
+
+# Secrets et tokens
+secrets/
+credentials/
+*.secret
+*.credential
+*secret*
+*password*
+*token*
+auth.json
+private.json
+
+# Clés SSH et certificats
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.pfx
+*.jks
+id_rsa*
+id_ed25519*
+known_hosts
+ssh_keys/
+
+# Ansible Vault et inventaires
+vault_pass.txt
+inventory.ini
+group_vars/*/vault.yml
+
+# ==============================================================================
+# FICHIERS TEMPORAIRES ET CACHE
+# ==============================================================================
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+
+# Cache et temporaires
+.cache/
+.tmp/
+tmp/
+temp/
+*.tmp
+*.backup
+*.bak
+
+# ==============================================================================
+# DÉPENDANCES ET BUILD
+# ==============================================================================
+
+# Node.js
+node_modules/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build et distribution
+dist/
+build/
+coverage/
+
+# ==============================================================================
+# DÉVELOPPEMENT ET IDE
+# ==============================================================================
+
+# IDE
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ==============================================================================
+# DOCKER ET VOLUMES
+# ==============================================================================
+
+# Docker
+docker-volumes/
+.dockerignore.bak
+
+# ==============================================================================
+# CI/CD ET DEPLOYMENT
+# ==============================================================================
+
+# Artifacts CI/CD
+test-results/
+reports/
+artifacts/
+
+# Deployment keys
+deploy_key*
+deployment_key*
+
+# ==============================================================================
+# DONNÉES SENSIBLES
+# ==============================================================================
+
+# Base de données
+*.db
+*.sqlite*
+database.json
+
+# Uploads et données utilisateur
+uploads/
+data/
+
+# ==============================================================================
+# CLOUD PROVIDERS
+# ==============================================================================
+
+# AWS
+.aws/
+
+# Azure
+.azure/
+
+# GCP
+.gcp/
+service-account.json
+gcloud-service-key.json
+
+# ==============================================================================
+# END OF GITIGNORE
+# ==============================================================================

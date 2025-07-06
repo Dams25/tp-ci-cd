@@ -1,0 +1,260 @@
+# ============================================
+# TEMPLATE: Docker Compose pour production
+# DESCRIPTION: Configuration complète pour déploiement
+# ============================================
+
+version: '3.8'
+
+services:
+  app:
+    image: {{ docker.image_name }}:{{ app_version }}
+    container_name: {{ app_name }}-app
+    restart: {{ docker.restart_policy | default('unless-stopped') }}
+    
+    ports:
+      - "{{ deployment.app_port | default(3000) }}:3000"
+    
+    environment:
+      - NODE_ENV={{ app_environment }}
+      - PORT=3000
+    
+    env_file:
+      - .env
+    
+    volumes:
+      - ./logs:/app/logs
+      - ./uploads:/app/uploads
+      {% if nginx.ssl_enabled | default(false) %}
+      - ./ssl:/app/ssl:ro
+      {% endif %}
+    
+    networks:
+      - {{ app_name }}-network
+    
+    depends_on:
+      - mongo
+      {% if redis.enabled | default(false) %}
+      - redis
+      {% endif %}
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: {{ health_checks.interval | default(30) }}s
+      timeout: {{ health_checks.timeout | default(10) }}s
+      retries: {{ health_checks.retries | default(3) }}
+      start_period: {{ health_checks.start_period | default(60) }}s
+    
+    deploy:
+      resources:
+        limits:
+          memory: {{ docker.memory_limit | default('512M') }}
+          cpus: '{{ docker.cpu_limit | default(0.5) }}'
+        reservations:
+          memory: {{ docker.memory_reservation | default('256M') }}
+          cpus: '{{ docker.cpu_reservation | default(0.25) }}'
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "{{ docker.log_max_size | default('10m') }}"
+        max-file: "{{ docker.log_max_files | default('3') }}"
+    
+    labels:
+      - "app.name={{ app_name }}"
+      - "app.version={{ app_version }}"
+      - "app.environment={{ app_environment }}"
+      - "deployment.strategy={{ deployment.strategy }}"
+      - "deployment.timestamp={{ ansible_date_time.iso8601 }}"
+
+  mongo:
+    image: mongo:{{ mongodb.version | default('5.0') }}
+    container_name: {{ app_name }}-mongo
+    restart: {{ docker.restart_policy | default('unless-stopped') }}
+    
+    {% if app_environment == 'production' %}
+    ports:
+      - "127.0.0.1:{{ mongodb.port }}:27017"
+    {% else %}
+    ports:
+      - "{{ mongodb.port }}:27017"
+    {% endif %}
+    
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: {{ secrets.mongodb.username }}
+      MONGO_INITDB_ROOT_PASSWORD: {{ secrets.mongodb.password }}
+      MONGO_INITDB_DATABASE: {{ secrets.mongodb.database }}
+    
+    volumes:
+      - mongodb_data:/data/db
+      - ./backup/mongodb:/backup
+      - ./config/mongodb:/docker-entrypoint-initdb.d:ro
+    
+    networks:
+      - {{ app_name }}-network
+    
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    deploy:
+      resources:
+        limits:
+          memory: {{ mongodb.memory_limit | default('1G') }}
+          cpus: '{{ mongodb.cpu_limit | default(1.0) }}'
+        reservations:
+          memory: {{ mongodb.memory_reservation | default('512M') }}
+          cpus: '{{ mongodb.cpu_reservation | default(0.5) }}'
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    {% if mongodb.replication.enabled | default(false) %}
+    command: ["--replSet", "{{ mongodb.replication.set_name | default('rs0') }}", "--bind_ip_all"]
+    {% endif %}
+
+{% if redis.enabled | default(false) %}
+  redis:
+    image: redis:{{ redis.version | default('6.2-alpine') }}
+    container_name: {{ app_name }}-redis
+    restart: {{ docker.restart_policy | default('unless-stopped') }}
+    
+    {% if app_environment == 'production' %}
+    ports:
+      - "127.0.0.1:{{ redis.port | default(6379) }}:6379"
+    {% else %}
+    ports:
+      - "{{ redis.port | default(6379) }}:6379"
+    {% endif %}
+    
+    volumes:
+      - redis_data:/data
+      - ./config/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    
+    networks:
+      - {{ app_name }}-network
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    
+    {% if secrets.redis.password is defined %}
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf", "--requirepass", "{{ secrets.redis.password }}"]
+    {% endif %}
+    
+    deploy:
+      resources:
+        limits:
+          memory: {{ redis.memory_limit | default('256M') }}
+          cpus: '{{ redis.cpu_limit | default(0.25) }}'
+{% endif %}
+
+{% if nginx.enabled | default(false) %}
+  nginx:
+    image: nginx:{{ nginx.version | default('alpine') }}
+    container_name: {{ app_name }}-nginx
+    restart: {{ docker.restart_policy | default('unless-stopped') }}
+    
+    ports:
+      - "{{ nginx.port | default(80) }}:80"
+      {% if nginx.ssl_enabled | default(false) %}
+      - "{{ nginx.ssl_port | default(443) }}:443"
+      {% endif %}
+    
+    volumes:
+      - ./config/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      {% if nginx.ssl_enabled | default(false) %}
+      - ./ssl:/etc/nginx/ssl:ro
+      {% endif %}
+      - ./logs/nginx:/var/log/nginx
+    
+    networks:
+      - {{ app_name }}-network
+    
+    depends_on:
+      - app
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+{% endif %}
+
+{% if monitoring.enabled | default(false) %}
+  prometheus:
+    image: prom/prometheus:{{ monitoring.prometheus_version | default('latest') }}
+    container_name: {{ app_name }}-prometheus
+    restart: {{ docker.restart_policy | default('unless-stopped') }}
+    
+    ports:
+      - "127.0.0.1:{{ monitoring.prometheus_port | default(9090) }}:9090"
+    
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus:ro
+      - prometheus_data:/prometheus
+    
+    networks:
+      - {{ app_name }}-network
+    
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time={{ monitoring.retention_time | default("15d") }}'
+      - '--web.enable-lifecycle'
+
+  grafana:
+    image: grafana/grafana:{{ monitoring.grafana_version | default('latest') }}
+    container_name: {{ app_name }}-grafana
+    restart: {{ docker.restart_policy | default('unless-stopped') }}
+    
+    ports:
+      - "127.0.0.1:{{ monitoring.grafana_port | default(3001) }}:3000"
+    
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    
+    networks:
+      - {{ app_name }}-network
+    
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD={{ secrets.grafana.admin_password | default('admin') }}
+      - GF_USERS_ALLOW_SIGN_UP=false
+{% endif %}
+
+networks:
+  {{ app_name }}-network:
+    driver: bridge
+    name: {{ app_name }}-network
+
+volumes:
+  mongodb_data:
+    driver: local
+    name: {{ app_name }}-mongodb-data
+  
+  {% if redis.enabled | default(false) %}
+  redis_data:
+    driver: local
+    name: {{ app_name }}-redis-data
+  {% endif %}
+  
+  {% if monitoring.enabled | default(false) %}
+  prometheus_data:
+    driver: local
+    name: {{ app_name }}-prometheus-data
+  
+  grafana_data:
+    driver: local
+    name: {{ app_name }}-grafana-data
+  {% endif %}

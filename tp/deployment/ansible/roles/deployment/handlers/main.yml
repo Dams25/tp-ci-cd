@@ -1,0 +1,345 @@
+# ============================================
+# HANDLERS: Gestionnaires d'événements pour le déploiement
+# DESCRIPTION: Actions déclenchées par les changements
+# VERSION: 1.0
+# ============================================
+
+---
+# Handlers pour Docker
+- name: docker build required
+  debug:
+    msg: "🔨 Build Docker requis - Dockerfile modifié"
+  listen: docker build required
+
+- name: services restart required
+  debug:
+    msg: "🔄 Redémarrage des services requis - Configuration modifiée"
+  listen: services restart required
+
+- name: restart nginx
+  systemd:
+    name: nginx
+    state: restarted
+  become: true
+  listen: restart nginx
+
+# Handlers pour les rollbacks
+- name: trigger rollback
+  include_tasks: ../tasks/rollback.yml
+  vars:
+    rollback_reason: "{{ rollback_reason | default('Deployment failed') }}"
+    rollback_to_version: "{{ rollback_to_version | default(previous_version) }}"
+  listen: trigger rollback
+
+- name: emergency rollback
+  block:
+    - name: "🚨 Rollback d'urgence déclenché"
+      debug:
+        msg: "Déclenchement du rollback d'urgence: {{ rollback_reason | default('Critical failure detected') }}"
+    
+    - name: "Arrêt immédiat des services défaillants"
+      shell: |
+        cd {{ app_directory }}
+        docker-compose down --timeout 10
+      ignore_errors: true
+    
+    - name: "Restauration de la version précédente"
+      include_tasks: ../tasks/emergency-restore.yml
+  listen: emergency rollback
+
+# Handlers pour les notifications
+- name: send deployment success notification
+  block:
+    - name: "📢 Notification de succès Slack"
+      uri:
+        url: "{{ notifications.slack.webhook_url }}"
+        method: POST
+        body_format: json
+        body:
+          channel: "{{ notifications.slack.channel | default('#deployments') }}"
+          username: "Ansible Deploy Bot"
+          icon_emoji: ":rocket:"
+          text: |
+            🚀 **Déploiement réussi !**
+            
+            📋 **Détails:**
+            • Application: {{ app_name }}
+            • Version: {{ app_version }}
+            • Environnement: {{ app_environment }}
+            • Serveur: {{ ansible_host }}
+            • Stratégie: {{ deployment.strategy }}
+            • Timestamp: {{ ansible_date_time.iso8601 }}
+            
+            🌐 **Accès:** http://{{ ansible_host }}:{{ deployment.app_port | default(3000) }}
+      when: 
+        - notifications.slack.enabled | default(false)
+        - notifications.slack.webhook_url is defined
+      delegate_to: localhost
+      ignore_errors: true
+
+    - name: "📧 Notification de succès par email"
+      mail:
+        to: "{{ notifications.email.recipients }}"
+        subject: "✅ [{{ app_environment | upper }}] Déploiement {{ app_name }} {{ app_version }} réussi"
+        body: |
+          Le déploiement de {{ app_name }} version {{ app_version }} s'est terminé avec succès.
+          
+          📋 Détails du déploiement:
+          • Environnement: {{ app_environment }}
+          • Serveur: {{ ansible_host }}
+          • Stratégie: {{ deployment.strategy }}
+          • Timestamp: {{ ansible_date_time.iso8601 }}
+          • Durée: {{ ansible_date_time.epoch | int - deployment_start_time | default(0) | int }}s
+          
+          🌐 L'application est accessible à:
+          http://{{ ansible_host }}:{{ deployment.app_port | default(3000) }}
+          
+          📊 Monitoring:
+          • Logs: {{ app_directory }}/logs/
+          • Health check: http://{{ ansible_host }}:{{ deployment.app_port | default(3000) }}/health
+          
+          Cordialement,
+          Système de déploiement automatisé Ansible
+        charset: utf8
+      when: 
+        - notifications.email.enabled | default(false)
+        - notifications.email.recipients is defined
+      delegate_to: localhost
+      ignore_errors: true
+  listen: send deployment success notification
+
+- name: send deployment failure notification
+  block:
+    - name: "🚨 Notification d'échec Slack"
+      uri:
+        url: "{{ notifications.slack.webhook_url }}"
+        method: POST
+        body_format: json
+        body:
+          channel: "{{ notifications.slack.channel | default('#deployments') }}"
+          username: "Ansible Deploy Bot"
+          icon_emoji: ":warning:"
+          text: |
+            🚨 **ÉCHEC du déploiement !**
+            
+            ❌ **Erreur:**
+            • Application: {{ app_name }}
+            • Version: {{ app_version }}
+            • Environnement: {{ app_environment }}
+            • Serveur: {{ ansible_host }}
+            • Erreur: {{ ansible_failed_result.msg | default('Erreur inconnue') }}
+            • Timestamp: {{ ansible_date_time.iso8601 }}
+            
+            🔧 **Actions recommandées:**
+            • Vérifier les logs: {{ app_directory }}/logs/
+            • Rollback automatique: {{ 'Activé' if rollback.auto_rollback else 'Désactivé' }}
+            • Contact: {{ notifications.emergency_contact | default('Équipe DevOps') }}
+      when: 
+        - notifications.slack.enabled | default(false)
+        - notifications.slack.webhook_url is defined
+      delegate_to: localhost
+      ignore_errors: true
+
+    - name: "📧 Notification d'échec par email"
+      mail:
+        to: "{{ notifications.email.emergency_recipients | default(notifications.email.recipients) }}"
+        subject: "🚨 [{{ app_environment | upper }}] ÉCHEC déploiement {{ app_name }} {{ app_version }}"
+        body: |
+          ⚠️  ALERTE: Le déploiement de {{ app_name }} version {{ app_version }} a échoué.
+          
+          ❌ Détails de l'erreur:
+          • Environnement: {{ app_environment }}
+          • Serveur: {{ ansible_host }}
+          • Timestamp: {{ ansible_date_time.iso8601 }}
+          • Erreur: {{ ansible_failed_result.msg | default('Erreur inconnue') }}
+          
+          📋 Actions prises:
+          • Rollback automatique: {{ 'Activé' if rollback.auto_rollback else 'Désactivé' }}
+          • Logs disponibles: {{ app_directory }}/logs/
+          
+          🔧 Actions requises:
+          1. Vérifier les logs d'erreur
+          2. Analyser la cause du problème
+          3. Corriger et relancer le déploiement
+          
+          📞 Contact d'urgence: {{ notifications.emergency_contact | default('Équipe DevOps') }}
+          
+          Cordialement,
+          Système de déploiement automatisé Ansible
+        charset: utf8
+      when: 
+        - notifications.email.enabled | default(false)
+        - notifications.email.emergency_recipients is defined or notifications.email.recipients is defined
+      delegate_to: localhost
+      ignore_errors: true
+  listen: send deployment failure notification
+
+- name: send health alert
+  block:
+    - name: "🏥 Alerte de santé Slack"
+      uri:
+        url: "{{ notifications.slack.webhook_url }}"
+        method: POST
+        body_format: json
+        body:
+          channel: "{{ notifications.slack.channel | default('#alerts') }}"
+          username: "Health Monitor Bot"
+          icon_emoji: ":warning:"
+          text: |
+            🏥 **ALERTE de santé détectée !**
+            
+            ⚠️  **Problème:**
+            • Application: {{ app_name }}
+            • Version: {{ app_version }}
+            • Serveur: {{ ansible_host }}
+            • Score de santé: {{ health_score | default('N/A') }}%
+            • Timestamp: {{ ansible_date_time.iso8601 }}
+            
+            📊 **Métriques système:**
+            • CPU: {{ cpu_usage.stdout | default('N/A') }}%
+            • Mémoire: {{ memory_usage.stdout | default('N/A') }}%
+            • Disque: {{ disk_usage.stdout | default('N/A') }}%
+            
+            🔍 **Actions recommandées:**
+            • Vérifier les logs d'application
+            • Contrôler les ressources système
+            • Analyser les métriques détaillées
+      when: 
+        - notifications.slack.enabled | default(false)
+        - notifications.slack.webhook_url is defined
+      delegate_to: localhost
+      ignore_errors: true
+
+    - name: "🔔 Enregistrement de l'alerte dans les logs"
+      lineinfile:
+        path: "{{ app_directory }}/logs/alerts.log"
+        line: "{{ ansible_date_time.iso8601 }} - HEALTH_ALERT - Score: {{ health_score | default('N/A') }}% - {{ ansible_failed_result.msg | default('Health check failed') }}"
+        create: true
+      ignore_errors: true
+  listen: send health alert
+
+# Handlers pour la sauvegarde d'urgence
+- name: emergency backup
+  block:
+    - name: "💾 Sauvegarde d'urgence des données"
+      shell: |
+        mkdir -p {{ app_directory }}/backup/emergency/{{ ansible_date_time.epoch }}
+        
+        # Sauvegarde de la base de données
+        docker exec $(docker-compose -f {{ app_directory }}/docker-compose.yml ps -q mongo) \
+        mongodump --db {{ secrets.mongodb.database }} --archive | \
+        gzip > {{ app_directory }}/backup/emergency/{{ ansible_date_time.epoch }}/mongodb-emergency.gz
+        
+        # Sauvegarde des configurations
+        cp -r {{ app_directory }}/.env {{ app_directory }}/backup/emergency/{{ ansible_date_time.epoch }}/
+        cp -r {{ app_directory }}/docker-compose.yml {{ app_directory }}/backup/emergency/{{ ansible_date_time.epoch }}/
+        
+        # Sauvegarde des logs critiques
+        cp -r {{ app_directory }}/logs {{ app_directory }}/backup/emergency/{{ ansible_date_time.epoch }}/
+      ignore_errors: true
+
+    - name: "📝 Enregistrement de la sauvegarde d'urgence"
+      lineinfile:
+        path: "{{ app_directory }}/logs/emergency-backups.log"
+        line: "{{ ansible_date_time.iso8601 }} - EMERGENCY_BACKUP - Location: backup/emergency/{{ ansible_date_time.epoch }}"
+        create: true
+  listen: emergency backup
+
+# Handlers pour le monitoring
+- name: update monitoring dashboards
+  block:
+    - name: "📊 Mise à jour des dashboards Grafana"
+      template:
+        src: grafana-dashboard.json.j2
+        dest: "{{ app_directory }}/monitoring/grafana/dashboards/{{ app_name }}-dashboard.json"
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0644'
+      when: monitoring.grafana_enabled | default(false)
+
+    - name: "🔔 Rechargement des règles d'alerte Prometheus"
+      uri:
+        url: "{{ monitoring.prometheus_url }}/-/reload"
+        method: POST
+        timeout: 10
+      when: monitoring.prometheus_enabled | default(false)
+      ignore_errors: true
+  listen: update monitoring dashboards
+
+# Handlers pour les certificats SSL
+- name: renew ssl certificates
+  block:
+    - name: "🔒 Renouvellement des certificats SSL"
+      shell: |
+        if command -v certbot &> /dev/null; then
+          certbot renew --quiet --no-self-upgrade
+        fi
+      become: true
+      when: nginx.ssl_enabled | default(false)
+
+    - name: "🔄 Redémarrage de nginx après renouvellement SSL"
+      systemd:
+        name: nginx
+        state: restarted
+      become: true
+      when: nginx.ssl_enabled | default(false)
+  listen: renew ssl certificates
+
+# Handlers pour les métriques
+- name: export deployment metrics
+  block:
+    - name: "📈 Export des métriques vers Prometheus"
+      copy:
+        content: |
+          # HELP deployment_success Indicates if deployment was successful
+          # TYPE deployment_success gauge
+          deployment_success{app="{{ app_name }}",version="{{ app_version }}",environment="{{ app_environment }}"} 1
+          
+          # HELP deployment_duration_seconds Duration of deployment in seconds
+          # TYPE deployment_duration_seconds gauge
+          deployment_duration_seconds{app="{{ app_name }}",version="{{ app_version }}",environment="{{ app_environment }}"} {{ ansible_date_time.epoch | int - deployment_start_time | default(0) | int }}
+          
+          # HELP deployment_timestamp Timestamp of last deployment
+          # TYPE deployment_timestamp gauge
+          deployment_timestamp{app="{{ app_name }}",version="{{ app_version }}",environment="{{ app_environment }}"} {{ ansible_date_time.epoch }}
+        dest: "{{ app_directory }}/monitoring/metrics/deployment.prom"
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0644'
+      when: monitoring.prometheus_enabled | default(false)
+
+    - name: "📊 Envoi des métriques vers InfluxDB"
+      uri:
+        url: "{{ monitoring.influxdb_url }}/write?db={{ monitoring.influxdb_database }}"
+        method: POST
+        body: |
+          deployment,app={{ app_name }},version={{ app_version }},environment={{ app_environment }},host={{ ansible_hostname }} success=1,duration={{ ansible_date_time.epoch | int - deployment_start_time | default(0) | int }}
+        headers:
+          Content-Type: "application/x-www-form-urlencoded"
+      when: monitoring.influxdb_enabled | default(false)
+      ignore_errors: true
+  listen: export deployment metrics
+
+# Handler pour la validation post-déploiement
+- name: post deployment validation
+  block:
+    - name: "✅ Validation finale du déploiement"
+      uri:
+        url: "http://localhost:{{ deployment.app_port | default(3000) }}/health"
+        method: GET
+        timeout: 30
+        status_code: 200
+      retries: 5
+      delay: 10
+
+    - name: "📝 Enregistrement de la validation"
+      lineinfile:
+        path: "{{ app_directory }}/logs/deployment-validations.log"
+        line: "{{ ansible_date_time.iso8601 }} - VALIDATION_SUCCESS - {{ app_name }}:{{ app_version }} deployed successfully"
+        create: true
+  rescue:
+    - name: "❌ Échec de la validation post-déploiement"
+      debug:
+        msg: "La validation post-déploiement a échoué"
+      notify: trigger rollback
+  listen: post deployment validation

@@ -1,0 +1,128 @@
+# ==============================================================================
+# RÔLE USER-CONFIGURATION - CONFIGURATION UTILISATEUR DOCKER
+# ==============================================================================
+
+---
+- name: "👤 Création de l'utilisateur Docker"
+  user:
+    name: "{{ docker_user }}"
+    shell: "{{ docker_user_shell }}"
+    home: "{{ docker_user_home }}"
+    create_home: true
+    groups: "{{ docker_group }},sudo"
+    append: true
+    state: present
+  tags: ['user', 'creation']
+
+- name: "🔑 Configuration des permissions sudo pour l'utilisateur Docker"
+  lineinfile:
+    path: /etc/sudoers.d/{{ docker_user }}
+    line: "{{ docker_user }} ALL=(ALL) NOPASSWD:ALL"
+    create: true
+    mode: '0440'
+    validate: 'visudo -cf %s'
+  tags: ['user', 'sudo']
+
+- name: "🐳 Ajout de l'utilisateur au groupe Docker"
+  user:
+    name: "{{ docker_user }}"
+    groups: "{{ docker_group }}"
+    append: true
+  notify: restart docker
+  tags: ['user', 'docker']
+
+- name: "📁 Création du répertoire .ssh pour l'utilisateur"
+  file:
+    path: "{{ docker_user_home }}/.ssh"
+    state: directory
+    owner: "{{ docker_user }}"
+    group: "{{ docker_user }}"
+    mode: '0700'
+  tags: ['user', 'ssh']
+
+- name: "🔐 Configuration des clés SSH autorisées (si définies)"
+  authorized_key:
+    user: "{{ docker_user }}"
+    key: "{{ item }}"
+    state: present
+  loop: "{{ ssh_public_keys | default([]) }}"
+  when: ssh_public_keys is defined and ssh_public_keys | length > 0
+  tags: ['user', 'ssh']
+
+- name: "📝 Configuration du .bashrc pour l'utilisateur Docker"
+  blockinfile:
+    path: "{{ docker_user_home }}/.bashrc"
+    block: |
+      # ==== Configuration Docker ====
+      alias d='docker'
+      alias dc='docker compose'
+      alias dps='docker ps'
+      alias dimg='docker images'
+      alias dlogs='docker logs'
+      alias dexec='docker exec -it'
+      
+      # ==== Aliases utiles ====
+      alias ll='ls -alF'
+      alias la='ls -A'
+      alias l='ls -CF'
+      alias ..='cd ..'
+      alias ...='cd ../..'
+      
+      # ==== Docker Completion ====
+      if [ -f /usr/share/bash-completion/completions/docker ]; then
+          source /usr/share/bash-completion/completions/docker
+      fi
+      
+      # ==== Prompt personnalisé ====
+      export PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+      
+      # ==== Variables d'environnement ====
+      export EDITOR=nano
+      export DOCKER_BUILDKIT=1
+      export COMPOSE_DOCKER_CLI_BUILD=1
+    marker: "# {mark} ANSIBLE MANAGED BLOCK - Docker Configuration"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_user }}"
+    create: true
+  tags: ['user', 'bashrc']
+
+- name: "📂 Création du répertoire personnel de travail"
+  file:
+    path: "{{ docker_user_home }}/projects"
+    state: directory
+    owner: "{{ docker_user }}"
+    group: "{{ docker_user }}"
+    mode: '0755'
+  tags: ['user', 'workspace']
+
+- name: "✅ Vérification des permissions utilisateur"
+  command: "groups {{ docker_user }}"
+  register: user_groups
+  changed_when: false
+  tags: ['user', 'verify']
+
+- name: "📊 Affichage des groupes de l'utilisateur"
+  debug:
+    msg: |
+      👤 Utilisateur: {{ docker_user }}
+      🔐 Groupes: {{ user_groups.stdout }}
+      📁 Répertoire: {{ docker_user_home }}
+      ✅ Configuration utilisateur terminée !
+  tags: ['user', 'verify']
+
+- name: "🧪 Test des permissions Docker pour l'utilisateur"
+  command: docker ps
+  become_user: "{{ docker_user }}"
+  register: docker_permissions_test
+  changed_when: false
+  ignore_errors: true
+  tags: ['user', 'test']
+
+- name: "✅ Validation des permissions Docker"
+  debug:
+    msg: |
+      🐳 Test permissions Docker: {{ 'SUCCÈS' if docker_permissions_test.rc == 0 else 'ÉCHEC' }}
+      {% if docker_permissions_test.rc != 0 %}
+      ⚠️  Note: Un redémarrage ou reconnexion peut être nécessaire pour activer les permissions
+      {% endif %}
+  tags: ['user', 'test']

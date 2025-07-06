@@ -1,0 +1,107 @@
+# ==============================================================================
+# .dockerignore - OPTIMISATION DU CONTEXTE DE BUILD DOCKER
+# ==============================================================================
+
+# Documentation
+README.md
+*.md
+docs/
+CHANGELOG
+LICENSE
+
+# Fichiers de configuration de développement
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# Jest cache
+.jest/
+
+# Temporary folders
+tmp/
+temp/
+
+# Environment files (sécurité)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+
+# Docker
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+compose.yml
+
+# Infrastructure et déploiement
+infrastructure/
+ansible/
+terraform/
+k8s/
+kubernetes/
+
+# Tests (si pas nécessaires en production)
+tests/
+test/
+**/*.test.js
+**/*.spec.js
+jest.config.js
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# NPM
+.npm
+.npmrc
+
+# Yarn
+.yarn/
+.yarnrc
+
+# ESLint
+.eslintrc*
+.eslintignore
+
+# Prettier
+.prettierrc*
+.prettierignore
+
+# EditorConfig
+.editorconfig

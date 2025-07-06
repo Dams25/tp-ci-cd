@@ -1,0 +1,296 @@
+# ============================================
+# ROLE: service-deployment
+# DESCRIPTION: Déploiement zero-downtime avec rolling update
+# VERSION: 1.0
+# ============================================
+
+---
+- name: "🚀 Début du déploiement des services"
+  debug:
+    msg: "Déploiement {{ deployment.strategy }} de la version {{ app_version }}"
+
+# Vérification de l'état des services existants
+- name: "🔍 État des services existants"
+  block:
+    - name: "Vérification des containers en cours"
+      shell: docker-compose -f {{ app_directory }}/docker-compose.yml ps --format json
+      register: current_containers
+      changed_when: false
+      failed_when: false
+
+    - name: "Parse des containers existants"
+      set_fact:
+        existing_containers: "{{ current_containers.stdout | from_json if current_containers.rc == 0 else [] }}"
+
+    - name: "Collecte des statistiques pré-déploiement"
+      shell: |
+        echo "=== État pré-déploiement ===" > {{ app_directory }}/logs/pre-deploy-state.log
+        docker stats --no-stream >> {{ app_directory }}/logs/pre-deploy-state.log 2>/dev/null || true
+        docker-compose -f {{ app_directory }}/docker-compose.yml ps >> {{ app_directory }}/logs/pre-deploy-state.log 2>/dev/null || true
+      changed_when: false
+  tags:
+    - service-deployment
+    - state
+
+# Stratégie de déploiement Blue-Green
+- name: "🔵 Déploiement Blue-Green"
+  block:
+    - name: "Création de l'environnement Green"
+      shell: |
+        cd {{ app_directory }}
+        docker-compose -f docker-compose.yml -p {{ app_name }}-green up -d --force-recreate
+      register: green_deployment
+      environment:
+        COMPOSE_PROJECT_NAME: "{{ app_name }}-green"
+
+    - name: "Test de santé de l'environnement Green"
+      uri:
+        url: "http://localhost:{{ deployment.green_port | default(3001) }}/health"
+        method: GET
+        timeout: 10
+      register: green_health
+      retries: 5
+      delay: 10
+
+    - name: "Basculement du trafic vers Green"
+      shell: |
+        # Mise à jour de la configuration nginx pour pointer vers Green
+        sed -i 's/{{ deployment.blue_port | default(3000) }}/{{ deployment.green_port | default(3001) }}/g' /etc/nginx/sites-available/{{ app_name }}
+        nginx -s reload
+      become: true
+      when: green_health.status == 200
+
+    - name: "Arrêt de l'environnement Blue"
+      shell: |
+        cd {{ app_directory }}
+        docker-compose -f docker-compose.yml -p {{ app_name }}-blue down
+      environment:
+        COMPOSE_PROJECT_NAME: "{{ app_name }}-blue"
+      when: green_health.status == 200
+
+    - name: "Renommage Green en Blue"
+      shell: |
+        cd {{ app_directory }}
+        docker-compose -f docker-compose.yml -p {{ app_name }}-blue up -d --no-recreate
+      environment:
+        COMPOSE_PROJECT_NAME: "{{ app_name }}-blue"
+        SOURCE_PROJECT: "{{ app_name }}-green"
+      when: green_health.status == 200
+  when: deployment.strategy == "blue-green"
+  tags:
+    - service-deployment
+    - blue-green
+
+# Stratégie de déploiement Rolling Update
+- name: "🔄 Déploiement Rolling Update"
+  block:
+    - name: "Mise à jour progressive des services"
+      shell: |
+        cd {{ app_directory }}
+        docker-compose pull
+        docker-compose up -d --force-recreate --no-deps {{ item }}
+      loop: "{{ deployment.services_order }}"
+      register: rolling_updates
+
+    - name: "Vérification après chaque service"
+      uri:
+        url: "http://localhost:{{ deployment.app_port | default(3000) }}/health"
+        method: GET
+        timeout: 10
+      retries: 3
+      delay: 5
+      loop: "{{ deployment.services_order }}"
+
+    - name: "Attente de stabilisation"
+      wait_for:
+        timeout: "{{ deployment.stabilization_time | default(30) }}"
+      delegate_to: localhost
+  when: deployment.strategy == "rolling"
+  tags:
+    - service-deployment
+    - rolling
+
+# Stratégie de déploiement Recreate (simple)
+- name: "🔄 Déploiement Recreate"
+  block:
+    - name: "Arrêt des services existants"
+      shell: |
+        cd {{ app_directory }}
+        docker-compose down --timeout {{ deployment.shutdown_timeout | default(30) }}
+      register: services_stopped
+
+    - name: "Démarrage des nouveaux services"
+      shell: |
+        cd {{ app_directory }}
+        docker-compose up -d --force-recreate
+      register: services_started
+
+    - name: "Attente du démarrage complet"
+      wait_for:
+        port: "{{ deployment.app_port | default(3000) }}"
+        delay: 5
+        timeout: "{{ deployment.startup_timeout | default(60) }}"
+  when: deployment.strategy == "recreate"
+  tags:
+    - service-deployment
+    - recreate
+
+# Configuration avancée des containers
+- name: "⚙️ Configuration avancée des containers"
+  block:
+    - name: "Application des limites de ressources"
+      shell: |
+        cd {{ app_directory }}
+        docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+      when: app_environment == "production"
+
+    - name: "Configuration du logging"
+      shell: |
+        docker update --log-opt max-size={{ docker.log_max_size | default('10m') }} \
+                     --log-opt max-file={{ docker.log_max_files | default('3') }} \
+                     $(docker-compose -f {{ app_directory }}/docker-compose.yml ps -q)
+
+    - name: "Configuration du restart automatique"
+      shell: |
+        docker update --restart={{ docker.restart_policy | default('unless-stopped') }} \
+                     $(docker-compose -f {{ app_directory }}/docker-compose.yml ps -q)
+  tags:
+    - service-deployment
+    - configuration
+
+# Vérification de la connectivité inter-services
+- name: "🔗 Test de connectivité inter-services"
+  block:
+    - name: "Test de connectivité App -> MongoDB"
+      shell: |
+        docker exec $(docker-compose -f {{ app_directory }}/docker-compose.yml ps -q app) \
+        node -e "
+        const mongoose = require('mongoose');
+        mongoose.connect('{{ mongodb.connection_string }}', {useNewUrlParser: true})
+          .then(() => {console.log('MongoDB OK'); process.exit(0);})
+          .catch(err => {console.error('MongoDB Error:', err); process.exit(1);});
+        "
+      register: app_mongo_test
+      retries: 3
+      delay: 10
+
+    - name: "Test de connectivité App -> Redis (si activé)"
+      shell: |
+        docker exec $(docker-compose -f {{ app_directory }}/docker-compose.yml ps -q app) \
+        node -e "
+        const redis = require('redis');
+        const client = redis.createClient('{{ redis.connection_string }}');
+        client.on('connect', () => {console.log('Redis OK'); process.exit(0);});
+        client.on('error', err => {console.error('Redis Error:', err); process.exit(1);});
+        "
+      when: redis.enabled | default(false)
+      register: app_redis_test
+      retries: 3
+      delay: 5
+
+    - name: "Test des APIs externes"
+      uri:
+        url: "{{ item }}"
+        method: GET
+        timeout: 10
+      loop: "{{ deployment.external_apis | default([]) }}"
+      register: external_apis_test
+      failed_when: false
+  tags:
+    - service-deployment
+    - connectivity
+
+# Monitoring et métriques post-déploiement
+- name: "📊 Configuration du monitoring"
+  block:
+    - name: "Démarrage des agents de monitoring"
+      shell: |
+        cd {{ app_directory }}
+        docker-compose -f docker-compose.monitoring.yml up -d
+      when: monitoring.enabled | default(false)
+
+    - name: "Configuration des alertes"
+      template:
+        src: alerting-rules.yml.j2
+        dest: "{{ app_directory }}/monitoring/alerting-rules.yml"
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0644'
+      when: monitoring.alerting_enabled | default(false)
+
+    - name: "Collecte des métriques initiales"
+      shell: |
+        echo "=== Métriques post-déploiement ===" > {{ app_directory }}/logs/post-deploy-metrics.log
+        docker stats --no-stream >> {{ app_directory }}/logs/post-deploy-metrics.log
+        curl -s http://localhost:{{ deployment.app_port | default(3000) }}/metrics >> {{ app_directory }}/logs/post-deploy-metrics.log || true
+  tags:
+    - service-deployment
+    - monitoring
+
+# Sauvegarde de l'état de déploiement
+- name: "💾 Sauvegarde de l'état de déploiement"
+  block:
+    - name: "Sauvegarde de la configuration docker-compose"
+      copy:
+        src: "{{ app_directory }}/docker-compose.yml"
+        dest: "{{ app_directory }}/backup/compose/docker-compose-{{ app_version }}.yml"
+        remote_src: true
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+
+    - name: "Sauvegarde des variables d'environnement"
+      copy:
+        src: "{{ app_directory }}/.env"
+        dest: "{{ app_directory }}/backup/env/.env-{{ app_version }}"
+        remote_src: true
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0600'
+
+    - name: "Création du point de restauration"
+      template:
+        src: restore-point.json.j2
+        dest: "{{ app_directory }}/backup/restore-point-{{ app_version }}.json"
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0644'
+      vars:
+        containers_state: "{{ existing_containers }}"
+        deployment_time: "{{ ansible_date_time.iso8601 }}"
+        deployment_strategy: "{{ deployment.strategy }}"
+  tags:
+    - service-deployment
+    - backup
+
+# Génération du rapport de déploiement
+- name: "📋 Génération du rapport de déploiement"
+  template:
+    src: deployment-report.txt.j2
+    dest: "{{ app_directory }}/logs/deployment-report-{{ ansible_date_time.epoch }}.txt"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0644'
+  vars:
+    deployment_strategy: "{{ deployment.strategy }}"
+    services_deployed: "{{ deployment.services_order }}"
+    health_checks_passed: "{{ app_mongo_test.rc == 0 }}"
+    deployment_duration: "{{ ansible_date_time.epoch | int - deployment_start_time | default(ansible_date_time.epoch) | int }}"
+  tags:
+    - service-deployment
+    - reporting
+
+- name: "✅ Déploiement des services terminé"
+  debug:
+    msg: "Services déployés avec succès - Stratégie: {{ deployment.strategy }}"
+
+# Notification de réussite
+- name: "📢 Notification de réussite du déploiement"
+  debug:
+    msg: |
+      🎉 Déploiement réussi !
+      Version: {{ app_version }}
+      Stratégie: {{ deployment.strategy }}
+      Services: {{ deployment.services_order | join(', ') }}
+      URL: http://{{ ansible_host }}:{{ deployment.app_port | default(3000) }}
+  notify:
+    - send deployment success notification

@@ -1,0 +1,153 @@
+#!/bin/bash
+# ==============================================================================
+# SCRIPT DE DÉPLOIEMENT - {{ app_name | upper }}
+# Généré automatiquement par Ansible
+# ==============================================================================
+
+set -e
+
+# Variables
+APP_DIR="{{ app_directory }}"
+DOCKER_USER="{{ docker_user }}"
+APP_NAME="{{ app_name }}"
+
+# Couleurs
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+log_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+log_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+log_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+log_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Fonction d'aide
+show_help() {
+    echo "Usage: $0 [start|stop|restart|status|update|logs|backup]"
+    echo ""
+    echo "Commands:"
+    echo "  start     - Démarrer l'application"
+    echo "  stop      - Arrêter l'application"
+    echo "  restart   - Redémarrer l'application"
+    echo "  status    - Afficher le statut"
+    echo "  update    - Mettre à jour l'application"
+    echo "  logs      - Afficher les logs"
+    echo "  backup    - Lancer une sauvegarde"
+    echo "  help      - Afficher cette aide"
+}
+
+# Vérifier si Docker est en cours d'exécution
+check_docker() {
+    if ! docker info &> /dev/null; then
+        log_error "Docker n'est pas en cours d'exécution !"
+        exit 1
+    fi
+}
+
+# Démarrer l'application
+start_app() {
+    log_info "🚀 Démarrage de l'application..."
+    cd "$APP_DIR"
+    docker-compose up -d
+    log_success "✅ Application démarrée"
+}
+
+# Arrêter l'application
+stop_app() {
+    log_info "🛑 Arrêt de l'application..."
+    cd "$APP_DIR"
+    docker-compose down
+    log_success "✅ Application arrêtée"
+}
+
+# Redémarrer l'application
+restart_app() {
+    log_info "🔄 Redémarrage de l'application..."
+    stop_app
+    start_app
+}
+
+# Afficher le statut
+show_status() {
+    log_info "📊 Statut de l'application:"
+    cd "$APP_DIR"
+    docker-compose ps
+    echo ""
+    log_info "💾 Utilisation des ressources:"
+    docker stats --no-stream
+}
+
+# Mettre à jour l'application
+update_app() {
+    log_info "📦 Mise à jour de l'application..."
+    cd "$APP_DIR"
+    
+    # Sauvegarde avant mise à jour
+    log_info "🔄 Sauvegarde avant mise à jour..."
+    "$APP_DIR/scripts/backup.sh"
+    
+    # Pull des nouvelles images
+    docker-compose pull
+    
+    # Redémarrage avec les nouvelles images
+    docker-compose up -d --force-recreate
+    
+    log_success "✅ Mise à jour terminée"
+}
+
+# Afficher les logs
+show_logs() {
+    log_info "📝 Logs de l'application:"
+    cd "$APP_DIR"
+    docker-compose logs -f --tail=100
+}
+
+# Lancer une sauvegarde
+run_backup() {
+    log_info "💾 Lancement de la sauvegarde..."
+    "$APP_DIR/scripts/backup.sh"
+}
+
+# Vérifications préliminaires
+check_docker
+
+# Navigation par commande
+case "${1:-help}" in
+    start)
+        start_app
+        ;;
+    stop)
+        stop_app
+        ;;
+    restart)
+        restart_app
+        ;;
+    status)
+        show_status
+        ;;
+    update)
+        update_app
+        ;;
+    logs)
+        show_logs
+        ;;
+    backup)
+        run_backup
+        ;;
+    help|*)
+        show_help
+        ;;
+esac

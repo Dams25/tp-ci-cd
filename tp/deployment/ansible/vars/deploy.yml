@@ -1,0 +1,213 @@
+# ==============================================================================
+# VARIABLES DE DÉPLOIEMENT - TODOLIST PRODUCTION
+# ==============================================================================
+
+# 🏷️ Version et Environment
+app_version: "{{ lookup('env', 'APP_VERSION') | default('latest') }}"
+app_environment: "{{ lookup('env', 'ENVIRONMENT') | default('production') }}"
+deployment_strategy: "rolling"  # rolling, blue-green, recreate
+
+# 📁 Chemins et Configuration
+app_directory: "/opt/todolist"
+app_name: "todolist-production"
+docker_user: "deploy"
+docker_group: "docker"
+
+# 🌐 Configuration réseau
+app_port: 3000
+app_alt_port: 4000
+mongodb_port: 27017
+nginx_port: 80
+ssl_port: 443
+
+# 🐳 Configuration Docker complète
+docker:
+  registry: ""  # Laissez vide pour build local
+  image_name: "todolist-app"
+  image_tag: "{{ app_version }}"
+  full_image_name: "{{ image_name }}:{{ image_tag }}"
+  build_args: []
+  registry_auth: false
+  push_image: false
+  pull_policy: "always"
+  
+  # Compose configuration
+  compose_version: "3.8"
+  compose_files:
+    production: "docker-compose.yml"
+    staging: "docker-compose-simple.yml" 
+    development: "docker-compose.dev.yml"
+  
+  # Network configuration  
+  networks:
+    - name: "todolist-network"
+      driver: "bridge"
+
+# 🔄 Configuration Déploiement
+deployment:
+  # Zero-downtime deployment
+  strategy: "rolling"  # rolling, blue-green, recreate
+  rolling_update: true
+  max_unavailable: 0
+  max_surge: 1
+  
+  # Timeouts
+  build_timeout: 600  # 10 minutes
+  deploy_timeout: 300  # 5 minutes
+  health_timeout: 120  # 2 minutes
+  
+  # Retries
+  health_check_retries: 10
+  rollback_on_failure: true
+  
+  # Validation
+  pre_deployment_checks: true
+  post_deployment_checks: true
+
+# 💾 Configuration Backup
+mongodb_backup: true
+backup_retention_days: 30
+backup_before_deploy: true
+backup_location: "{{ app_directory }}/backups/pre-deploy"
+
+# 🔄 Configuration Rollback
+enable_rollback: true
+rollback_on_health_failure: true
+keep_previous_versions: 3
+rollback_timeout: 180
+
+# 🗄️ Configuration MongoDB
+mongodb:
+  port: 27017
+  database: "todolist"
+  username: "todolist_user"
+  password: "{{ vault_mongodb_password | default('secure_password') }}"
+  auth_enabled: true
+  replica_set: false
+  
+  # Backup configuration
+  backup_enabled: true
+  backup_schedule: "0 2 * * *"  # Daily at 2 AM
+  backup_retention_days: 30
+  
+  # Performance
+  connection_pool_size: 10
+  timeout: 5000
+
+# 🔍 Health Checks complète
+health_checks:
+  enabled: true
+  interval: 30  # seconds
+  timeout: 10   # seconds
+  retries: 3
+  start_period: 60  # seconds
+  
+  # Configuration application
+  app:
+    url: "http://localhost:{{ app_port }}"
+    endpoints:
+      - path: "/"
+        expected_status: 200
+      - path: "/health"
+        expected_status: 200
+      - path: "/api/status"
+        expected_status: 200
+    timeout: 5
+    retries: "{{ deployment.health_check_retries | default(3) }}"
+    delay: 10
+    
+  # Configuration MongoDB
+  mongodb:
+    port: "{{ mongodb_port }}"
+    timeout: 10
+    retries: 5
+    delay: 5
+  
+  # Actions en cas d'échec
+  failure_action: "restart"
+  max_failures: 3
+
+# 📊 Monitoring et Logs
+logging:
+  level: "info"  # debug, info, warning, error
+  rotation: true
+  max_size: "100MB"
+  max_files: 10
+  
+monitoring:
+  enabled: true
+  metrics_enabled: true
+  logging_enabled: true
+  
+  # Prometheus
+  prometheus:
+    enabled: false
+    port: 9090
+  
+  # Grafana
+  grafana:
+    enabled: false
+    port: 3001
+  
+  # Log aggregation
+  log_level: "info"
+  log_format: "json"
+  log_rotation: true
+
+# 🚨 Configuration Notifications
+notifications:
+  enabled: true
+  
+  # Slack
+  slack:
+    enabled: false
+    webhook_url: "{{ vault_slack_webhook | default('') }}"
+    channel: "#deployments"
+  
+  # Email
+  email:
+    enabled: false
+    smtp_server: "smtp.example.com"
+    smtp_port: 587
+    username: "{{ vault_email_username | default('') }}"
+    password: "{{ vault_email_password | default('') }}"
+    from_address: "noreply@example.com"
+    to_addresses: ["admin@example.com"]
+  
+  # Discord
+  discord:
+    enabled: false
+    webhook_url: "{{ vault_discord_webhook | default('') }}"
+
+# 🎯 Tests fonctionnels
+functional_tests:
+  enabled: true
+  timeout: 60
+  tests:
+    - name: "API Base"
+      url: "http://localhost:{{ app_port }}/"
+      method: "GET"
+      expected_status: 200
+      
+    - name: "Health Check"
+      url: "http://localhost:{{ app_port }}/health"
+      method: "GET"
+      expected_status: 200
+      expected_content: "OK"
+      
+    - name: "Tasks Endpoint"
+      url: "http://localhost:{{ app_port }}/tasks"
+      method: "GET"
+      expected_status: [200, 404]  # 404 acceptable si pas de tâches
+      
+  performance_tests:
+    enabled: false
+    max_response_time: 2000  # 2 secondes
+    concurrent_users: 10
+
+# 🔧 Maintenance Mode
+maintenance_mode:
+  enabled: false
+  message: "Application en cours de maintenance"
+  estimated_duration: "10 minutes"
+  contact_info: "support@example.com"

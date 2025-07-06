@@ -1,0 +1,89 @@
+# ==============================================================================
+# RÔLE SYSTEM-UPDATE - MISE À JOUR ET PRÉPARATION DU SYSTÈME
+# ==============================================================================
+
+---
+- name: "📦 Mise à jour du cache des paquets"
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+  tags: ['system', 'update']
+
+- name: "🔄 Mise à jour complète du système"
+  apt:
+    upgrade: dist
+    autoremove: yes
+    autoclean: yes
+  register: system_upgrade
+  tags: ['system', 'update']
+
+- name: "📋 Affichage des paquets mis à jour"
+  debug:
+    var: system_upgrade.stdout_lines
+  when: system_upgrade.changed
+  tags: ['system', 'update']
+
+- name: "⏰ Configuration du fuseau horaire"
+  timezone:
+    name: "{{ timezone | default('Europe/Paris') }}"
+  tags: ['system', 'timezone']
+
+- name: "📦 Installation des paquets essentiels"
+  apt:
+    name: "{{ essential_packages }}"
+    state: present
+    update_cache: yes
+  tags: ['system', 'packages']
+
+- name: "🐍 Installation de pip3"
+  apt:
+    name: python3-pip
+    state: present
+  tags: ['system', 'python']
+
+- name: "📦 Installation des modules Python pour Ansible"
+  pip:
+    name: "{{ python_packages }}"
+    state: present
+    executable: pip3
+  tags: ['system', 'python']
+
+- name: "🔍 Vérification si un redémarrage est nécessaire"
+  stat:
+    path: /var/run/reboot-required
+  register: reboot_required_file
+  tags: ['system', 'reboot']
+
+- name: "⚠️  Notification redémarrage nécessaire"
+  debug:
+    msg: |
+      🔄 ATTENTION: Un redémarrage du système est recommandé !
+      📝 Exécutez: sudo reboot
+      ⏰ Ou utilisez: ansible-playbook ... -e "reboot_after_update=true"
+  when: reboot_required_file.stat.exists
+  tags: ['system', 'reboot']
+
+- name: "🔄 Redémarrage automatique (si activé)"
+  reboot:
+    reboot_timeout: 300
+    pre_reboot_delay: 10
+    post_reboot_delay: 30
+    msg: "🔄 Redémarrage pour finaliser les mises à jour système"
+  when: 
+    - reboot_required_file.stat.exists
+    - reboot_after_update | default(false)
+  tags: ['system', 'reboot']
+
+- name: "✅ Vérification finale du système"
+  command: uname -a
+  register: system_info
+  changed_when: false
+  tags: ['system', 'verify']
+
+- name: "📊 Informations système après mise à jour"
+  debug:
+    msg: |
+      🖥️  Système: {{ system_info.stdout }}
+      📅 Mise à jour terminée: {{ ansible_date_time.iso8601 }}
+      ✅ Système prêt pour l'installation Docker
+  tags: ['system', 'verify']

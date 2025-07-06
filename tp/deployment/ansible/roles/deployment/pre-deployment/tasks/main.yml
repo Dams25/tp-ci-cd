@@ -1,0 +1,183 @@
+# ==============================================================================
+# RÔLE PRE-DEPLOYMENT - PRÉPARATION ET SAUVEGARDE
+# ==============================================================================
+
+---
+- name: "📋 Vérification de l'état actuel des services"
+  block:
+    - name: "🔍 Vérification services Docker existants"
+      command: "docker compose -f {{ app_directory }}/{{ compose_file }} ps --format json"
+      register: current_services
+      changed_when: false
+      failed_when: false
+      become_user: "{{ docker_user }}"
+      
+    - name: "📊 Enregistrement état actuel"
+      set_fact:
+        services_before_deploy: "{{ current_services.stdout | from_json if current_services.rc == 0 else [] }}"
+        
+    - name: "🔍 Vérification version actuelle"
+      shell: |
+        if docker images --format "table {{.Repository}}:{{.Tag}}" | grep "{{ image_name }}"; then
+          docker images --format "{{.Repository}}:{{.Tag}}" | grep "{{ image_name }}" | head -1
+        else
+          echo "none"
+        fi
+      register: current_version_check
+      changed_when: false
+      become_user: "{{ docker_user }}"
+      
+    - name: "📝 Enregistrement version précédente"
+      set_fact:
+        previous_version: "{{ current_version_check.stdout | default('none') }}"
+        
+  tags: ['pre-deploy', 'status']
+
+- name: "💾 Sauvegarde pré-déploiement"
+  block:
+    - name: "📁 Création répertoire backup avec timestamp"
+      file:
+        path: "{{ backup_location }}/{{ deployment_timestamp }}"
+        state: directory
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0755'
+      when: backup_before_deploy
+
+    - name: "💾 Sauvegarde MongoDB si actif"
+      block:
+        - name: "🔍 Vérification container MongoDB actif"
+          command: docker ps --filter "name=mongodb" --format "{{.Names}}"
+          register: mongodb_running
+          changed_when: false
+          become_user: "{{ docker_user }}"
+          
+        - name: "📦 Backup MongoDB"
+          shell: |
+            BACKUP_DIR="{{ backup_location }}/{{ deployment_timestamp }}"
+            if docker ps --filter "name=mongodb" --format "{{.Names}}" | grep -q mongodb; then
+              echo "🗄️ Sauvegarde MongoDB en cours..."
+              docker exec mongodb mongodump --out /tmp/backup_{{ deployment_timestamp }}
+              docker cp mongodb:/tmp/backup_{{ deployment_timestamp }} "$BACKUP_DIR/mongodb_backup"
+              docker exec mongodb rm -rf /tmp/backup_{{ deployment_timestamp }}
+              echo "✅ Sauvegarde MongoDB terminée"
+            else
+              echo "⚠️ Container MongoDB non trouvé, sauvegarde ignorée"
+            fi
+          register: mongodb_backup_result
+          become_user: "{{ docker_user }}"
+          when: 
+            - mongodb_backup
+            - mongodb_running.stdout | length > 0
+            
+      when: backup_before_deploy
+      tags: ['backup', 'mongodb']
+
+    - name: "⚙️ Sauvegarde configurations actuelles"
+      block:
+        - name: "📋 Sauvegarde docker-compose.yml actuel"
+          copy:
+            src: "{{ app_directory }}/{{ compose_file }}"
+            dest: "{{ backup_location }}/{{ deployment_timestamp }}/docker-compose.yml.backup"
+            remote_src: true
+            owner: "{{ docker_user }}"
+            group: "{{ docker_group }}"
+            mode: '0644'
+          when: backup_before_deploy
+          ignore_errors: true
+          
+        - name: "🔐 Sauvegarde .env actuel"
+          copy:
+            src: "{{ app_directory }}/.env"
+            dest: "{{ backup_location }}/{{ deployment_timestamp }}/.env.backup"
+            remote_src: true
+            owner: "{{ docker_user }}"
+            group: "{{ docker_group }}"
+            mode: '0600'
+          when: backup_before_deploy
+          ignore_errors: true
+          
+      tags: ['backup', 'config']
+
+- name: "🧹 Préparation espace disque"
+  block:
+    - name: "💾 Vérification espace disque disponible"
+      shell: "df -h {{ app_directory }} | awk 'NR==2 {print $5}' | sed 's/%//'"
+      register: disk_usage
+      changed_when: false
+      
+    - name: "⚠️ Alerte espace disque"
+      debug:
+        msg: |
+          ⚠️ ATTENTION: Espace disque utilisé à {{ disk_usage.stdout }}%
+          💾 Vérifiez l'espace disponible avant de continuer
+      when: disk_usage.stdout | int > 80
+      
+    - name: "❌ Échec si espace disque critique"
+      fail:
+        msg: "❌ Espace disque critique ({{ disk_usage.stdout }}%). Libérez de l'espace avant de continuer."
+      when: disk_usage.stdout | int > 95
+      
+    - name: "🧹 Nettoyage préventif images Docker obsolètes"
+      shell: |
+        # Suppression images non taguées (danglingg)
+        docker image prune -f
+        
+        # Garde uniquement les {{ keep_previous_versions }} dernières versions
+        if docker images {{ image_name }} --format "{{.Tag}}" | wc -l | awk '{print $1}' | xargs test $(cat) -gt {{ keep_previous_versions }}; then
+          docker images {{ image_name }} --format "{{.Tag}}" | tail -n +$(({{ keep_previous_versions }} + 1)) | xargs -I {} docker rmi {{ image_name }}:{} || true
+        fi
+      register: cleanup_result
+      become_user: "{{ docker_user }}"
+      when: cleanup.remove_old_images
+      tags: ['cleanup', 'disk']
+
+- name: "🔍 Validation pré-requis déploiement"
+  block:
+    - name: "📁 Vérification répertoires requis"
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0755'
+      loop:
+        - "{{ app_directory }}/logs"
+        - "{{ app_directory }}/data"
+        - "{{ app_directory }}/config"
+        
+    - name: "🔐 Vérification variables secrets critiques"
+      assert:
+        that:
+          - secrets.mongodb_root_password | length > 8
+          - secrets.session_secret | length > 16
+        fail_msg: "❌ Variables secrets insuffisamment sécurisées"
+        success_msg: "✅ Variables secrets validées"
+        
+    - name: "🌐 Test connectivité réseau"
+      wait_for:
+        port: "{{ item }}"
+        host: "localhost"
+        timeout: 5
+        state: stopped  # On vérifie que les ports sont libres
+      loop:
+        - "{{ app_port }}"
+        - "{{ mongodb_port }}"
+      ignore_errors: true
+      
+  tags: ['validation', 'pre-checks']
+
+- name: "📊 Rapport pré-déploiement"
+  debug:
+    msg: |
+      📋 RAPPORT PRÉ-DÉPLOIEMENT
+      ========================
+      🏷️ Version actuelle: {{ previous_version }}
+      🎯 Version cible: {{ app_version }}
+      💾 Espace disque: {{ disk_usage.stdout }}%
+      📦 Services actifs: {{ services_before_deploy | length }}
+      💾 Backup effectué: {{ 'Oui' if backup_before_deploy else 'Non' }}
+      🔄 Rollback activé: {{ 'Oui' if enable_rollback else 'Non' }}
+      
+      ✅ Prêt pour le déploiement !
+  tags: ['pre-deploy', 'report']

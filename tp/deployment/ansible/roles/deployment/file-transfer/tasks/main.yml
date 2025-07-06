@@ -1,0 +1,185 @@
+# ============================================
+# ROLE: file-transfer
+# DESCRIPTION: Transfert sécurisé des fichiers de l'application
+# VERSION: 1.0
+# ============================================
+
+---
+- name: "🔄 Début du transfert des fichiers d'application"
+  debug:
+    msg: "Transfert des fichiers vers {{ app_directory }} pour version {{ app_version }}"
+
+# Validation structure de répertoires
+- name: "📁 Vérification de la structure des répertoires"
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0755'
+  loop:
+    - "{{ app_directory }}/source"
+    - "{{ app_directory }}/config"
+    - "{{ app_directory }}/temp"
+    - "{{ app_directory }}/backup/files"
+  tags: 
+    - file-transfer
+    - setup
+
+# Sauvegarde des fichiers existants
+- name: "💾 Sauvegarde des fichiers de configuration existants"
+  block:
+    - name: "Vérification existence docker-compose.yml"
+      stat:
+        path: "{{ app_directory }}/docker-compose.yml"
+      register: compose_exists
+
+    - name: "Sauvegarde docker-compose.yml existant"
+      copy:
+        src: "{{ app_directory }}/docker-compose.yml"
+        dest: "{{ app_directory }}/backup/files/docker-compose.yml.{{ ansible_date_time.epoch }}"
+        remote_src: yes
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+      when: compose_exists.stat.exists
+      
+    - name: "Sauvegarde des configurations existantes"
+      archive:
+        path: "{{ app_directory }}/config/*"
+        dest: "{{ app_directory }}/backup/files/config-backup-{{ ansible_date_time.epoch }}.tar.gz"
+        format: gz
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+      ignore_errors: true
+  tags:
+    - file-transfer
+    - backup
+
+# Transfert du Dockerfile
+- name: "📋 Transfert du Dockerfile optimisé"
+  copy:
+    src: "{{ local_app_path }}/docker/Dockerfile"
+    dest: "{{ app_directory }}/source/Dockerfile"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0644'
+    backup: yes
+  register: dockerfile_transfer
+  notify:
+    - docker build required
+  tags:
+    - file-transfer
+    - docker
+
+# Transfert docker-compose.yml
+- name: "🐳 Transfert du docker-compose.yml production"
+  template:
+    src: docker-compose.yml.j2
+    dest: "{{ app_directory }}/docker-compose.yml"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0644'
+    backup: yes
+  register: compose_transfer
+  notify:
+    - services restart required
+  tags:
+    - file-transfer
+    - docker
+
+# Transfert des sources de l'application
+- name: "💻 Transfert des sources de l'application"
+  synchronize:
+    src: "{{ local_app_path }}/"
+    dest: "{{ app_directory }}/source/"
+    delete: yes
+    recursive: yes
+    rsync_opts:
+      - "--exclude=node_modules"
+      - "--exclude=.git"
+      - "--exclude=.env*"
+      - "--exclude=logs"
+      - "--exclude=*.log"
+      - "--exclude=coverage"
+      - "--exclude=.nyc_output"
+  become_user: "{{ docker_user }}"
+  register: source_transfer
+  notify:
+    - docker build required
+  tags:
+    - file-transfer
+    - source
+
+# Transfert des fichiers de configuration
+- name: "⚙️ Transfert des configurations système"
+  copy:
+    src: "{{ item.src }}"
+    dest: "{{ app_directory }}/config/{{ item.dest }}"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: "{{ item.mode | default('0644') }}"
+  loop:
+    - { src: "{{ local_app_path }}/config/mongoose.js", dest: "mongoose.js" }
+    - { src: "{{ local_app_path }}/package.json", dest: "package.json" }
+    - { src: "{{ local_app_path }}/jest.config.js", dest: "jest.config.js" }
+  tags:
+    - file-transfer
+    - config
+
+# Transfert des scripts d'entrée
+- name: "🔧 Transfert du script d'entrée Docker"
+  copy:
+    src: "{{ local_app_path }}/docker/entrypoint.sh"
+    dest: "{{ app_directory }}/source/entrypoint.sh"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0755'
+  tags:
+    - file-transfer
+    - scripts
+
+# Vérification de l'intégrité des fichiers
+- name: "🔍 Vérification de l'intégrité des fichiers transférés"
+  stat:
+    path: "{{ item }}"
+  register: file_check
+  failed_when: not file_check.stat.exists
+  loop:
+    - "{{ app_directory }}/source/Dockerfile"
+    - "{{ app_directory }}/docker-compose.yml"
+    - "{{ app_directory }}/source/package.json"
+    - "{{ app_directory }}/source/entrypoint.sh"
+  tags:
+    - file-transfer
+    - validation
+
+# Permissions finales
+- name: "🔐 Application des permissions finales"
+  file:
+    path: "{{ app_directory }}"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    recurse: yes
+  tags:
+    - file-transfer
+    - permissions
+
+# Rapport de transfert
+- name: "📊 Génération du rapport de transfert"
+  template:
+    src: transfer-report.txt.j2
+    dest: "{{ app_directory }}/logs/transfer-report-{{ ansible_date_time.epoch }}.txt"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0644'
+  vars:
+    dockerfile_changed: "{{ dockerfile_transfer.changed }}"
+    compose_changed: "{{ compose_transfer.changed }}"
+    source_changed: "{{ source_transfer.changed }}"
+  tags:
+    - file-transfer
+    - reporting
+
+- name: "✅ Transfert des fichiers terminé"
+  debug:
+    msg: "Tous les fichiers ont été transférés avec succès"

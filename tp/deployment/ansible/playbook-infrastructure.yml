@@ -1,0 +1,100 @@
+# ==============================================================================
+# ANSIBLE PLAYBOOK - INFRASTRUCTURE DOCKER PRODUCTION
+# Préparation complète d'un serveur Ubuntu/Debian pour déploiement Docker
+# ==============================================================================
+
+---
+- name: "🚀 Infrastructure Docker Production - TodoList Application"
+  hosts: docker_servers
+  become: yes
+  become_method: sudo
+  gather_facts: yes
+  
+  vars_files:
+    - vars/infrastructure.yml
+    - vars/security.yml
+  
+  pre_tasks:
+    - name: "📋 Vérification du système d'exploitation"
+      fail:
+        msg: "❌ Ce playbook est compatible uniquement avec Ubuntu 20.04+/Debian 11+"
+      when: 
+        - ansible_distribution not in ['Ubuntu', 'Debian']
+        - (ansible_distribution == 'Ubuntu' and ansible_distribution_major_version|int < 20) or
+          (ansible_distribution == 'Debian' and ansible_distribution_major_version|int < 11)
+    
+    - name: "🕒 Affichage des informations système"
+      debug:
+        msg: |
+          🖥️  Système: {{ ansible_distribution }} {{ ansible_distribution_version }}
+          🏗️  Architecture: {{ ansible_architecture }}
+          💾 Mémoire: {{ ansible_memory_mb.real.total }}MB
+          🔧 Utilisateur Docker: {{ docker_user }}
+          📁 Répertoire application: {{ app_directory }}
+
+  roles:
+    - role: system-update
+      when: update_system | default(true)
+      tags: ['system', 'update']
+    
+    - role: docker-installation
+      tags: ['docker', 'installation']
+    
+    - role: user-configuration
+      tags: ['user', 'docker']
+    
+    - role: firewall-security
+      when: firewall_enabled | default(true)
+      tags: ['security', 'firewall']
+    
+    - role: directory-structure
+      tags: ['directories', 'structure']
+    
+    - role: monitoring-tools
+      when: monitoring_enabled | default(false)
+      tags: ['monitoring', 'optional']
+  
+  post_tasks:
+    - name: "✅ Vérification finale de l'installation Docker"
+      command: docker --version
+      register: docker_version_check
+      become_user: "{{ docker_user }}"
+      
+    - name: "✅ Vérification Docker Compose"
+      command: docker compose version
+      register: docker_compose_check
+      become_user: "{{ docker_user }}"
+      
+    - name: "📊 Affichage des versions installées"
+      debug:
+        msg: |
+          🐳 {{ docker_version_check.stdout }}
+          🔧 {{ docker_compose_check.stdout }}
+          ✅ Infrastructure prête pour le déploiement !
+          
+    - name: "🔄 Test de fonctionnement Docker"
+      docker_container:
+        name: hello-world-test
+        image: hello-world
+        state: started
+        auto_remove: yes
+      become_user: "{{ docker_user }}"
+      register: docker_test
+      
+    - name: "🧹 Nettoyage après test"
+      command: docker system prune -f
+      become_user: "{{ docker_user }}"
+      when: docker_test is succeeded
+
+  handlers:
+    - name: restart docker
+      systemd:
+        name: docker
+        state: restarted
+        enabled: yes
+        
+    - name: restart ufw
+      systemd:
+        name: ufw
+        state: restarted
+      when: ansible_distribution == 'Ubuntu'

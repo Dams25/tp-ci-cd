@@ -1,0 +1,123 @@
+# ==============================================================================
+# RÔLE DOCKER-INSTALLATION - INSTALLATION DOCKER & DOCKER COMPOSE
+# ==============================================================================
+
+---
+- name: "🗑️  Suppression des anciennes versions Docker (si présentes)"
+  apt:
+    name:
+      - docker
+      - docker-engine
+      - docker.io
+      - containerd
+      - runc
+    state: absent
+  tags: ['docker', 'cleanup']
+
+- name: "📦 Installation des dépendances pour Docker"
+  apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - apt-transport-https
+      - software-properties-common
+    state: present
+    update_cache: yes
+  tags: ['docker', 'dependencies']
+
+- name: "🔑 Création du répertoire pour les clés GPG"
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+  tags: ['docker', 'setup']
+
+- name: "📝 Ajout de la clé GPG officielle Docker"
+  get_url:
+    url: "{{ docker_gpg_key }}"
+    dest: /etc/apt/keyrings/docker.asc
+    mode: '0644'
+  tags: ['docker', 'setup']
+
+- name: "📋 Ajout du dépôt Docker officiel"
+  apt_repository:
+    repo: "deb [arch={{ ansible_architecture_map[ansible_architecture] | default(ansible_architecture) }} signed-by=/etc/apt/keyrings/docker.asc] {{ docker_repo_url }}/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable"
+    state: present
+    filename: docker
+  vars:
+    ansible_architecture_map:
+      x86_64: amd64
+      aarch64: arm64
+      armv7l: armhf
+  tags: ['docker', 'repository']
+
+- name: "🔄 Mise à jour du cache APT"
+  apt:
+    update_cache: yes
+  tags: ['docker', 'repository']
+
+- name: "🐳 Installation Docker Engine et Docker Compose"
+  apt:
+    name: "{{ docker_packages }}"
+    state: present
+    update_cache: yes
+  notify: restart docker
+  tags: ['docker', 'install']
+
+- name: "⚙️  Configuration du daemon Docker"
+  copy:
+    content: "{{ docker_daemon_config | to_nice_json }}"
+    dest: /etc/docker/daemon.json
+    backup: yes
+    mode: '0644'
+  notify: restart docker
+  tags: ['docker', 'config']
+
+- name: "🚀 Démarrage et activation de Docker"
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  tags: ['docker', 'service']
+
+- name: "⏳ Attente que Docker soit prêt"
+  wait_for:
+    port: 2376
+    host: localhost
+    timeout: 30
+  ignore_errors: true
+  tags: ['docker', 'verify']
+
+- name: "✅ Vérification de l'installation Docker"
+  command: docker --version
+  register: docker_version
+  changed_when: false
+  tags: ['docker', 'verify']
+
+- name: "✅ Vérification de Docker Compose"
+  command: docker compose version
+  register: docker_compose_version
+  changed_when: false
+  tags: ['docker', 'verify']
+
+- name: "📊 Affichage des versions installées"
+  debug:
+    msg: |
+      🐳 Docker: {{ docker_version.stdout }}
+      🔧 Docker Compose: {{ docker_compose_version.stdout }}
+      ✅ Installation Docker terminée avec succès !
+  tags: ['docker', 'verify']
+
+- name: "🧪 Test fonctionnel de Docker"
+  command: docker run --rm hello-world
+  register: docker_test
+  changed_when: false
+  tags: ['docker', 'test']
+
+- name: "🧹 Nettoyage après test"
+  command: docker system prune -f
+  when: docker_test is succeeded
+  tags: ['docker', 'cleanup']

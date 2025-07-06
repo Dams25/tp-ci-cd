@@ -1,0 +1,145 @@
+# ==============================================================================
+# RÔLE MONITORING-TOOLS - INSTALLATION OUTILS DE MONITORING
+# ==============================================================================
+
+---
+- name: "📊 Installation des outils de monitoring système"
+  apt:
+    name: "{{ monitoring_tools }}"
+    state: present
+    update_cache: true
+  tags: ['monitoring', 'tools']
+
+- name: "🐳 Installation de ctop pour monitoring Docker"
+  get_url:
+    url: "https://github.com/bcicen/ctop/releases/download/v0.7.7/ctop-0.7.7-linux-amd64"
+    dest: "/usr/local/bin/ctop"
+    mode: '0755'
+  tags: ['monitoring', 'docker']
+
+- name: "📊 Installation de dive pour analyse d'images Docker"
+  get_url:
+    url: "https://github.com/wagoodman/dive/releases/download/v0.10.0/dive_0.10.0_linux_amd64.deb"
+    dest: "/tmp/dive.deb"
+  tags: ['monitoring', 'docker']
+
+- name: "📦 Installation du package dive"
+  apt:
+    deb: "/tmp/dive.deb"
+    state: present
+  tags: ['monitoring', 'docker']
+
+- name: "🧹 Nettoyage du fichier dive temporaire"
+  file:
+    path: "/tmp/dive.deb"
+    state: absent
+  tags: ['monitoring', 'cleanup']
+
+- name: "📊 Configuration du monitoring Docker avec cAdvisor (optionnel)"
+  docker_container:
+    name: cadvisor
+    image: "gcr.io/cadvisor/cadvisor:latest"
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - "/dev/kmsg:/dev/kmsg"
+  when: cadvisor_enabled | default(false)
+  become_user: "{{ docker_user }}"
+  tags: ['monitoring', 'cadvisor']
+
+- name: "📈 Installation de Node Exporter pour Prometheus (optionnel)"
+  docker_container:
+    name: node_exporter
+    image: "prom/node-exporter:latest"
+    state: started
+    restart_policy: unless-stopped
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+  when: prometheus_monitoring | default(false)
+  become_user: "{{ docker_user }}"
+  tags: ['monitoring', 'prometheus']
+
+- name: "🔧 Création du script de monitoring personnalisé"
+  template:
+    src: monitor.sh.j2
+    dest: "{{ app_directory }}/scripts/monitor.sh"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0755'
+  tags: ['monitoring', 'scripts']
+
+- name: "⏰ Configuration du cron pour le monitoring (optionnel)"
+  cron:
+    name: "System monitoring check"
+    minute: "*/5"
+    job: "{{ app_directory }}/scripts/monitor.sh >> /var/log/{{ app_name }}/monitoring.log 2>&1"
+    user: "{{ docker_user }}"
+  when: monitoring_cron | default(false)
+  tags: ['monitoring', 'cron']
+
+- name: "📊 Création du dashboard de monitoring simplifié"
+  template:
+    src: dashboard.html.j2
+    dest: "{{ app_directory }}/monitoring/dashboard.html"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0644'
+  tags: ['monitoring', 'dashboard']
+
+- name: "✅ Vérification des outils de monitoring installés"
+  command: "{{ item }}"
+  loop:
+    - "htop --version"
+    - "ctop -v"
+    - "dive --version"
+  register: monitoring_versions
+  changed_when: false
+  ignore_errors: true
+  tags: ['monitoring', 'verify']
+
+- name: "📊 Affichage des versions des outils de monitoring"
+  debug:
+    msg: |
+      📊 Outils de monitoring installés:
+      {% for result in monitoring_versions.results %}
+      {{ result.stdout | default('Erreur: ' + result.stderr | default('Unknown')) }}
+      {% endfor %}
+      
+      🔧 Outils disponibles:
+      - htop: Monitoring système interactif
+      - iotop: Monitoring I/O
+      - nethogs: Monitoring réseau par processus
+      - ncdu: Analyseur d'espace disque
+      - ctop: Monitoring Docker containers
+      - dive: Analyse des layers d'images Docker
+      
+      📍 Scripts personnalisés:
+      - {{ app_directory }}/scripts/monitor.sh
+      
+      {% if cadvisor_enabled | default(false) %}
+      🌐 cAdvisor: http://localhost:8080
+      {% endif %}
+      {% if prometheus_monitoring | default(false) %}
+      📈 Node Exporter: http://localhost:9100
+      {% endif %}
+      
+      ✅ Configuration monitoring terminée !
+  tags: ['monitoring', 'verify']

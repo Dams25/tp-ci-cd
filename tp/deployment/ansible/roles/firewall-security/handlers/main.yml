@@ -1,0 +1,18 @@
+---
+- name: restart ufw
+  systemd:
+    name: ufw
+    state: restarted
+  when: ansible_distribution == 'Ubuntu'
+
+- name: restart ssh
+  systemd:
+    name: ssh
+    state: restarted
+
+- name: restart fail2ban
+  systemd:
+    name: fail2ban
+    state: restarted
+    enabled: yes
+  when: fail2ban_enabled | default(false)

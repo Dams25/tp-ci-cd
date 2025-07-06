@@ -1,0 +1,416 @@
+# ============================================
+# ROLE: post-deployment
+# DESCRIPTION: Tâches post-déploiement, nettoyage et notifications
+# VERSION: 1.0
+# ============================================
+
+---
+- name: "🧹 Début des tâches post-déploiement"
+  debug:
+    msg: "Nettoyage et finalisation du déploiement {{ app_version }}"
+
+# Nettoyage des ressources Docker
+- name: "🐳 Nettoyage des ressources Docker"
+  block:
+    - name: "Suppression des images orphelines"
+      shell: docker image prune -f
+      register: image_cleanup
+      changed_when: "'deleted' in image_cleanup.stdout"
+
+    - name: "Suppression des containers arrêtés"
+      shell: docker container prune -f
+      register: container_cleanup
+      changed_when: "'deleted' in container_cleanup.stdout"
+
+    - name: "Suppression des volumes orphelins"
+      shell: docker volume prune -f
+      register: volume_cleanup
+      changed_when: "'deleted' in volume_cleanup.stdout"
+      when: post_deployment.cleanup_volumes | default(false)
+
+    - name: "Suppression des réseaux inutilisés"
+      shell: docker network prune -f
+      register: network_cleanup
+      changed_when: "'deleted' in network_cleanup.stdout"
+
+    - name: "Nettoyage du cache de build"
+      shell: docker builder prune -f --filter until=24h
+      register: builder_cleanup
+      changed_when: "'deleted' in builder_cleanup.stdout"
+
+    - name: "Suppression des anciennes images tagguées"
+      shell: |
+        # Garder seulement les N dernières versions
+        docker images {{ docker.image_name }} --format "{{.Tag}}" | \
+        grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | \
+        sort -V | \
+        head -n -{{ post_deployment.keep_image_versions | default(3) }} | \
+        xargs -I {} docker rmi {{ docker.image_name }}:{} || true
+      when: post_deployment.cleanup_old_images | default(true)
+  tags:
+    - post-deployment
+    - docker-cleanup
+
+# Nettoyage des fichiers temporaires
+- name: "📁 Nettoyage des fichiers temporaires"
+  block:
+    - name: "Suppression des fichiers de build temporaires"
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ app_directory }}/temp"
+        - "{{ app_directory }}/.dockerignore.tmp"
+        - "{{ app_directory }}/source/.env.tmp"
+        - "/tmp/{{ app_name }}-*"
+
+    - name: "Nettoyage des logs anciens"
+      find:
+        paths: "{{ app_directory }}/logs"
+        age: "{{ post_deployment.log_retention_days | default(30) }}d"
+        patterns: "*.log,*.txt"
+      register: old_logs
+
+    - name: "Suppression des logs anciens"
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ old_logs.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+    - name: "Rotation des logs actuels"
+      shell: |
+        cd {{ app_directory }}/logs
+        for log in *.log; do
+          if [[ -f "$log" && $(stat -f%z "$log" 2>/dev/null || stat -c%s "$log" 2>/dev/null) -gt {{ post_deployment.max_log_size | default(52428800) }} ]]; then
+            mv "$log" "${log%.log}-$(date +%Y%m%d).log"
+            gzip "${log%.log}-$(date +%Y%m%d).log"
+          fi
+        done
+      changed_when: false
+  tags:
+    - post-deployment
+    - file-cleanup
+
+# Sauvegarde post-déploiement
+- name: "💾 Sauvegarde post-déploiement"
+  block:
+    - name: "Création d'un snapshot de l'état actuel"
+      shell: |
+        cd {{ app_directory }}
+        tar -czf backup/snapshots/post-deploy-{{ app_version }}-{{ ansible_date_time.epoch }}.tar.gz \
+          --exclude='backup' \
+          --exclude='logs/*.log' \
+          --exclude='temp' \
+          .
+      
+    - name: "Sauvegarde de la configuration MongoDB"
+      shell: |
+        docker exec $(docker-compose -f {{ app_directory }}/docker-compose.yml ps -q mongo) \
+        mongodump --db {{ secrets.mongodb.database }} --archive | \
+        gzip > {{ app_directory }}/backup/mongodb/post-deploy-{{ app_version }}-{{ ansible_date_time.epoch }}.gz
+      when: post_deployment.backup_database | default(true)
+
+    - name: "Nettoyage des anciennes sauvegardes"
+      find:
+        paths: 
+          - "{{ app_directory }}/backup/snapshots"
+          - "{{ app_directory }}/backup/mongodb"
+        age: "{{ post_deployment.backup_retention_days | default(7) }}d"
+      register: old_backups
+
+    - name: "Suppression des anciennes sauvegardes"
+      file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ old_backups.files }}"
+  tags:
+    - post-deployment
+    - backup
+
+# Configuration du monitoring et alertes
+- name: "📊 Configuration du monitoring post-déploiement"
+  block:
+    - name: "Mise à jour des dashboards de monitoring"
+      template:
+        src: "{{ item }}.j2"
+        dest: "{{ app_directory }}/monitoring/{{ item }}"
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0644'
+      loop:
+        - grafana-dashboard.json
+        - prometheus-config.yml
+      when: monitoring.enabled | default(false)
+
+    - name: "Configuration des règles d'alerte"
+      template:
+        src: alert-rules.yml.j2
+        dest: "{{ app_directory }}/monitoring/alert-rules.yml"
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0644'
+      when: monitoring.alerting_enabled | default(false)
+
+    - name: "Redémarrage des services de monitoring"
+      shell: |
+        cd {{ app_directory }}
+        docker-compose -f docker-compose.monitoring.yml restart
+      when: monitoring.enabled | default(false)
+
+    - name: "Test des alertes configurées"
+      uri:
+        url: "{{ monitoring.alertmanager_url }}/api/v1/alerts"
+        method: GET
+        timeout: 10
+      register: alertmanager_test
+      when: monitoring.alerting_enabled | default(false)
+      failed_when: false
+  tags:
+    - post-deployment
+    - monitoring
+
+# Mise à jour de la documentation
+- name: "📚 Mise à jour de la documentation"
+  block:
+    - name: "Génération du rapport de déploiement final"
+      template:
+        src: final-deployment-report.md.j2
+        dest: "{{ app_directory }}/docs/deployment-{{ app_version }}.md"
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0644'
+      vars:
+        deployment_summary:
+          version: "{{ app_version }}"
+          environment: "{{ app_environment }}"
+          strategy: "{{ deployment.strategy }}"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+          duration: "{{ ansible_date_time.epoch | int - deployment_start_time | default(ansible_date_time.epoch) | int }}"
+
+    - name: "Mise à jour du changelog"
+      lineinfile:
+        path: "{{ app_directory }}/CHANGELOG.md"
+        line: "## [{{ app_version }}] - {{ ansible_date_time.date }}"
+        insertafter: "# Changelog"
+        create: true
+
+    - name: "Génération de la documentation API"
+      shell: |
+        cd {{ app_directory }}/source
+        if [[ -f "package.json" ]] && grep -q "swagger" package.json; then
+          docker exec $(docker-compose -f {{ app_directory }}/docker-compose.yml ps -q app) \
+          npm run docs:generate || true
+        fi
+      when: post_deployment.generate_api_docs | default(false)
+  tags:
+    - post-deployment
+    - documentation
+
+# Tests de régression post-déploiement
+- name: "🧪 Tests de régression automatisés"
+  block:
+    - name: "Exécution des tests unitaires"
+      shell: |
+        cd {{ app_directory }}
+        docker-compose exec -T app npm test
+      register: unit_tests
+      when: post_deployment.run_tests | default(false)
+
+    - name: "Exécution des tests d'intégration"
+      shell: |
+        cd {{ app_directory }}
+        docker-compose exec -T app npm run test:integration
+      register: integration_tests
+      when: post_deployment.run_tests | default(false)
+      failed_when: false
+
+    - name: "Génération du rapport de tests"
+      template:
+        src: test-report.html.j2
+        dest: "{{ app_directory }}/docs/test-report-{{ app_version }}.html"
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0644'
+      vars:
+        unit_test_result: "{{ unit_tests.rc | default(-1) }}"
+        integration_test_result: "{{ integration_tests.rc | default(-1) }}"
+      when: post_deployment.run_tests | default(false)
+  tags:
+    - post-deployment
+    - testing
+
+# Configuration des tâches cron pour maintenance
+- name: "⏰ Configuration des tâches de maintenance"
+  block:
+    - name: "Nettoyage automatique quotidien"
+      cron:
+        name: "Nettoyage quotidien {{ app_name }}"
+        minute: "0"
+        hour: "2"
+        job: "{{ app_directory }}/scripts/daily-cleanup.sh > /dev/null 2>&1"
+        user: "{{ docker_user }}"
+
+    - name: "Sauvegarde automatique"
+      cron:
+        name: "Sauvegarde {{ app_name }}"
+        minute: "0"
+        hour: "1"
+        job: "{{ app_directory }}/scripts/backup.sh > /dev/null 2>&1"
+        user: "{{ docker_user }}"
+      when: post_deployment.automated_backup | default(true)
+
+    - name: "Vérification de santé périodique"
+      cron:
+        name: "Health check {{ app_name }}"
+        minute: "*/15"
+        job: "{{ app_directory }}/scripts/health-check.sh > /dev/null 2>&1"
+        user: "{{ docker_user }}"
+      when: post_deployment.periodic_health_checks | default(true)
+
+    - name: "Mise à jour des certificats SSL"
+      cron:
+        name: "SSL renewal {{ app_name }}"
+        minute: "0"
+        hour: "3"
+        day: "1"
+        job: "{{ app_directory }}/scripts/ssl-renewal.sh > /dev/null 2>&1"
+        user: "{{ docker_user }}"
+      when: nginx.ssl_enabled | default(false)
+  tags:
+    - post-deployment
+    - cron
+
+# Optimisation des performances
+- name: "⚡ Optimisations post-déploiement"
+  block:
+    - name: "Optimisation de la base de données"
+      shell: |
+        docker exec $(docker-compose -f {{ app_directory }}/docker-compose.yml ps -q mongo) \
+        mongo {{ secrets.mongodb.database }} --eval "
+          db.runCommand({reIndex: 'tasks'});
+          db.runCommand({compact: 'tasks'});
+        "
+      when: post_deployment.optimize_database | default(false)
+
+    - name: "Préchauffage du cache"
+      uri:
+        url: "http://localhost:{{ deployment.app_port | default(3000) }}{{ item }}"
+        method: GET
+        timeout: 30
+      loop: "{{ post_deployment.warmup_urls | default(['/']) }}"
+      failed_when: false
+
+    - name: "Configuration du cache nginx"
+      template:
+        src: nginx-cache.conf.j2
+        dest: "/etc/nginx/conf.d/{{ app_name }}-cache.conf"
+        backup: true
+      become: true
+      notify: restart nginx
+      when: nginx.cache_enabled | default(false)
+  tags:
+    - post-deployment
+    - optimization
+
+# Notifications finales
+- name: "📢 Notifications de fin de déploiement"
+  block:
+    - name: "Notification Slack"
+      uri:
+        url: "{{ notifications.slack.webhook_url }}"
+        method: POST
+        body_format: json
+        body:
+          channel: "{{ notifications.slack.channel | default('#deployments') }}"
+          username: "Ansible Deploy Bot"
+          text: |
+            ✅ Déploiement {{ app_name }} {{ app_version }} terminé avec succès !
+            
+            📊 **Résumé:**
+            • Environnement: {{ app_environment }}
+            • Stratégie: {{ deployment.strategy }}
+            • Durée: {{ ansible_date_time.epoch | int - deployment_start_time | default(ansible_date_time.epoch) | int }}s
+            • URL: http://{{ ansible_host }}:{{ deployment.app_port | default(3000) }}
+            
+            🧹 **Nettoyage effectué:**
+            • Images supprimées: {{ image_cleanup.stdout | regex_findall('deleted') | length }}
+            • Containers supprimés: {{ container_cleanup.stdout | regex_findall('deleted') | length }}
+            • Volumes supprimés: {{ volume_cleanup.stdout | regex_findall('deleted') | length if volume_cleanup is defined else 0 }}
+      when: 
+        - notifications.slack.enabled | default(false)
+        - notifications.slack.webhook_url is defined
+
+    - name: "Notification par email"
+      mail:
+        to: "{{ notifications.email.recipients }}"
+        subject: "✅ Déploiement {{ app_name }} {{ app_version }} réussi"
+        body: |
+          Le déploiement de {{ app_name }} version {{ app_version }} s'est terminé avec succès.
+          
+          Détails:
+          - Environnement: {{ app_environment }}
+          - Serveur: {{ ansible_host }}
+          - Timestamp: {{ ansible_date_time.iso8601 }}
+          - Durée: {{ ansible_date_time.epoch | int - deployment_start_time | default(ansible_date_time.epoch) | int }} secondes
+          
+          L'application est accessible à: http://{{ ansible_host }}:{{ deployment.app_port | default(3000) }}
+          
+          Cordialement,
+          Système de déploiement automatisé
+        charset: utf8
+      delegate_to: localhost
+      when: 
+        - notifications.email.enabled | default(false)
+        - notifications.email.recipients is defined
+
+    - name: "Mise à jour du statut de déploiement"
+      uri:
+        url: "{{ deployment.status_endpoint }}"
+        method: POST
+        body_format: json
+        body:
+          application: "{{ app_name }}"
+          version: "{{ app_version }}"
+          environment: "{{ app_environment }}"
+          status: "deployed"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+          server: "{{ ansible_host }}"
+      when: deployment.status_endpoint is defined
+      failed_when: false
+  tags:
+    - post-deployment
+    - notifications
+
+# Rapport final de déploiement
+- name: "📋 Génération du rapport final"
+  template:
+    src: post-deployment-summary.txt.j2
+    dest: "{{ app_directory }}/logs/post-deployment-summary-{{ ansible_date_time.epoch }}.txt"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0644'
+  vars:
+    cleanup_summary:
+      images_removed: "{{ image_cleanup.stdout | regex_findall('deleted') | length }}"
+      containers_removed: "{{ container_cleanup.stdout | regex_findall('deleted') | length }}"
+      volumes_removed: "{{ volume_cleanup.stdout | regex_findall('deleted') | length if volume_cleanup is defined else 0 }}"
+    test_summary:
+      unit_tests_passed: "{{ unit_tests.rc == 0 if unit_tests is defined else false }}"
+      integration_tests_passed: "{{ integration_tests.rc == 0 if integration_tests is defined else false }}"
+    monitoring_configured: "{{ monitoring.enabled | default(false) }}"
+    notifications_sent: "{{ notifications.slack.enabled | default(false) or notifications.email.enabled | default(false) }}"
+
+- name: "✅ Post-déploiement terminé avec succès"
+  debug:
+    msg: |
+      🎉 Déploiement {{ app_name }} {{ app_version }} finalisé !
+      
+      📊 Résumé:
+      • Environnement: {{ app_environment }}
+      • URL: http://{{ ansible_host }}:{{ deployment.app_port | default(3000) }}
+      • Durée totale: {{ ansible_date_time.epoch | int - deployment_start_time | default(ansible_date_time.epoch) | int }}s
+      • Nettoyage: ✅
+      • Monitoring: {{ '✅' if monitoring.enabled | default(false) else '❌' }}
+      • Notifications: {{ '✅' if (notifications.slack.enabled | default(false) or notifications.email.enabled | default(false)) else '❌' }}

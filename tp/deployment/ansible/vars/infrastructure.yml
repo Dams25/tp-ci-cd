@@ -1,0 +1,92 @@
+# ==============================================================================
+# VARIABLES INFRASTRUCTURE - CONFIGURATION PRINCIPALE
+# ==============================================================================
+
+# 👤 Configuration utilisateur Docker
+docker_user: "deploy"
+docker_group: "docker"
+docker_user_shell: "/bin/bash"
+docker_user_home: "/home/{{ docker_user }}"
+
+# 📁 Structure des répertoires
+app_directory: "/opt/todolist"
+app_name: "todolist-production"
+directories_to_create:
+  - "{{ app_directory }}"
+  - "{{ app_directory }}/data"
+  - "{{ app_directory }}/logs"
+  - "{{ app_directory }}/backups"
+  - "{{ app_directory }}/scripts"
+  - "{{ app_directory }}/config"
+  - "/var/log/{{ app_name }}"
+
+# 🐳 Configuration Docker
+docker_edition: "ce"
+docker_packages:
+  - "docker-{{ docker_edition }}"
+  - "docker-{{ docker_edition }}-cli"
+  - "containerd.io"
+  - "docker-buildx-plugin"
+  - "docker-compose-plugin"
+
+docker_repo_url: "https://download.docker.com/linux"
+docker_gpg_key: "{{ docker_repo_url }}/{{ ansible_distribution | lower }}/gpg"
+
+# Configuration du daemon Docker
+docker_daemon_config:
+  log-driver: "json-file"
+  log-opts:
+    max-size: "10m"
+    max-file: "3"
+  storage-driver: "overlay2"
+  exec-opts:
+    - "native.cgroupdriver=systemd"
+  live-restore: true
+  userland-proxy: false
+  experimental: false
+
+# 🔄 Configuration système
+update_system: true
+reboot_required: false
+timezone: "Europe/Paris"
+
+# 📦 Paquets système essentiels
+essential_packages:
+  - curl
+  - wget
+  - gnupg
+  - lsb-release
+  - ca-certificates
+  - software-properties-common
+  - apt-transport-https
+  - git
+  - unzip
+  - tree
+  - htop
+  - nano
+  - vim
+  - jq
+  - python3-pip
+
+# 🐍 Modules Python pour Ansible
+python_packages:
+  - docker
+  - docker-compose
+  - requests
+
+# 🔧 Configuration des services
+services_to_enable:
+  - docker
+  - ssh
+  
+services_to_start:
+  - docker
+  - ssh
+
+# 📊 Configuration monitoring (optionnel)
+monitoring_enabled: false
+monitoring_tools:
+  - htop
+  - iotop
+  - nethogs
+  - ncdu

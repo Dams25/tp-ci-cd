@@ -1,0 +1,111 @@
+# ==============================================================================
+# VARIABLES SÉCURITÉ - CONFIGURATION FIREWALL ET SÉCURITÉ
+# ==============================================================================
+
+# 🔥 Configuration Firewall
+firewall_enabled: true
+firewall_package: "ufw"  # Ubuntu/Debian
+
+# 🚪 Ports autorisés
+allowed_ports:
+  # SSH Management
+  - port: 22
+    proto: tcp
+    rule: allow
+    comment: "SSH Access"
+    
+  # Application ports
+  - port: 3000
+    proto: tcp
+    rule: allow
+    comment: "TodoList App"
+    
+  - port: 4000
+    proto: tcp
+    rule: allow
+    comment: "TodoList App Alt"
+    
+  # Web ports
+  - port: 80
+    proto: tcp
+    rule: allow
+    comment: "HTTP"
+    
+  - port: 443
+    proto: tcp
+    rule: allow
+    comment: "HTTPS"
+
+# 🔒 Règles de sécurité spécifiques
+security_rules:
+  # Bloquer ping externe (optionnel)
+  - rule: "deny"
+    port: "icmp"
+    comment: "Block ICMP ping"
+    enabled: false
+    
+  # Limiter les tentatives SSH
+  - rule: "limit"
+    port: "ssh"
+    comment: "Rate limit SSH"
+    enabled: true
+
+# 🌐 Adresses IP autorisées (whitelist)
+allowed_ips:
+  # Exemples d'IPs de confiance
+  # - "192.168.1.0/24"     # Réseau local
+  # - "10.0.0.0/8"         # VPN corporate
+  # - "YOUR_OFFICE_IP/32"  # IP fixe bureau
+
+# 🚫 Adresses IP bloquées (blacklist)
+blocked_ips: []
+  # Exemple:
+  # - "192.168.100.5"
+
+# 🔐 Configuration SSH sécurisée
+ssh_security_config:
+  port: 22
+  permit_root_login: false
+  password_authentication: false
+  pubkey_authentication: true
+  challenge_response_authentication: false
+  use_pam: true
+  x11_forwarding: false
+  print_motd: false
+  tcp_keep_alive: true
+  client_alive_interval: 300
+  client_alive_count_max: 2
+  max_auth_tries: 3
+  max_sessions: 10
+
+# 🛡️ Fail2Ban configuration (optionnel)
+fail2ban_enabled: false
+fail2ban_jails:
+  - name: "sshd"
+    enabled: true
+    port: "ssh"
+    filter: "sshd"
+    logpath: "/var/log/auth.log"
+    maxretry: 3
+    bantime: 3600
+    findtime: 600
+
+# 🔄 Mises à jour automatiques
+automatic_updates:
+  enabled: true
+  unattended_upgrades: true
+  auto_reboot: false
+  auto_reboot_time: "03:00"
+  
+# 📝 Logs de sécurité
+security_logging:
+  auth_log: "/var/log/auth.log"
+  ufw_log: "/var/log/ufw.log"
+  docker_log: "/var/log/docker.log"
+  
+# 🔍 Audit de sécurité
+security_audit:
+  check_open_ports: true
+  check_running_services: true
+  check_user_permissions: true
+  check_docker_security: true

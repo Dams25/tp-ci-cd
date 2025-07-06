@@ -1,0 +1,157 @@
+# ==============================================================================
+# ANSIBLE PLAYBOOK - DÉPLOIEMENT APPLICATION TODOLIST
+# Déploiement zero-downtime avec rollback automatique et monitoring
+# ==============================================================================
+
+---
+- name: "🚀 Déploiement TodoList Production - Zero Downtime"
+  hosts: docker_servers
+  become: yes
+  become_method: sudo
+  gather_facts: yes
+  serial: 1  # Déploiement un serveur à la fois
+  
+  vars_files:
+    - vars/deploy.yml
+    - vars/infrastructure.yml
+    - vars/security.yml
+  
+  vars:
+    # Variables dynamiques
+    deployment_timestamp: "{{ ansible_date_time.epoch }}"
+    current_version: "{{ app_version | default('latest') }}"
+    backup_required: "{{ mongodb_backup | default(true) }}"
+    rollback_enabled: "{{ enable_rollback | default(true) }}"
+    
+  pre_tasks:
+    - name: "📋 Validation des prérequis de déploiement"
+      block:
+        - name: "🔍 Vérification de l'infrastructure Docker"
+          command: docker --version
+          register: docker_check
+          failed_when: docker_check.rc != 0
+          
+        - name: "🔍 Vérification Docker Compose"
+          command: docker compose version
+          register: compose_check
+          failed_when: compose_check.rc != 0
+          
+        - name: "📁 Vérification structure répertoires"
+          stat:
+            path: "{{ app_directory }}"
+          register: app_dir_check
+          failed_when: not app_dir_check.stat.exists
+          
+        - name: "👤 Vérification utilisateur Docker"
+          command: "groups {{ docker_user }}"
+          register: user_groups
+          failed_when: "'docker' not in user_groups.stdout"
+          
+        - name: "🕒 Affichage informations déploiement"
+          debug:
+            msg: |
+              🚀 DÉPLOIEMENT TODOLIST - {{ environment | upper }}
+              📅 Timestamp: {{ deployment_timestamp }}
+              🏷️  Version: {{ current_version }}
+              🖥️  Serveur: {{ inventory_hostname }}
+              📁 Répertoire: {{ app_directory }}
+              👤 Utilisateur: {{ docker_user }}
+              💾 Backup MongoDB: {{ backup_required }}
+              🔄 Rollback activé: {{ rollback_enabled }}
+      tags: ['validation', 'pre-deploy']
+      
+  roles:
+    - role: deployment/pre-deployment
+      tags: ['pre-deploy', 'backup']
+      
+    - role: deployment/file-transfer
+      tags: ['transfer', 'files']
+      
+    - role: deployment/secrets-management
+      tags: ['secrets', 'security']
+      
+    - role: deployment/docker-build
+      tags: ['build', 'docker']
+      
+    - role: deployment/service-deployment
+      tags: ['deploy', 'services']
+      
+    - role: deployment/health-checks
+      tags: ['health', 'verify']
+      
+    - role: deployment/post-deployment
+      tags: ['post-deploy', 'cleanup']
+  
+  post_tasks:
+    - name: "✅ Résumé du déploiement"
+      debug:
+        msg: |
+          🎉 DÉPLOIEMENT TERMINÉ AVEC SUCCÈS !
+          🏷️  Version déployée: {{ current_version }}
+          🕒 Durée: {{ ansible_date_time.epoch | int - deployment_timestamp | int }}s
+          🌐 Application: http://{{ inventory_hostname }}:{{ app_port | default(3000) }}
+          🔍 Health check: http://{{ inventory_hostname }}:{{ app_port | default(3000) }}/health
+          📊 Statut services: {{ deployed_services | default('Tous actifs') }}
+      when: deployment_success | default(true)
+      
+    - name: "🔔 Notification de succès"
+      include_tasks: tasks/notifications.yml
+      vars:
+        notification_type: "success"
+        message: "✅ Déploiement {{ current_version }} réussi sur {{ inventory_hostname }}"
+      when: 
+        - deployment_success | default(true)
+        - notifications_enabled | default(false)
+      tags: ['notifications']
+
+  handlers:
+    - name: restart application
+      include_tasks: handlers/restart-app.yml
+      
+    - name: rollback deployment
+      include_tasks: handlers/rollback.yml
+      when: rollback_enabled | default(true)
+      
+    - name: send notification
+      include_tasks: handlers/notifications.yml
+      
+    - name: cleanup resources
+      include_tasks: handlers/cleanup.yml
+
+# ==============================================================================
+# GESTION D'ERREURS GLOBALE
+# ==============================================================================
+  rescue:
+    - name: "❌ Gestion d'erreur de déploiement"
+      block:
+        - name: "📝 Enregistrement de l'erreur"
+          debug:
+            msg: |
+              ❌ ÉCHEC DU DÉPLOIEMENT !
+              🏷️  Version: {{ current_version }}
+              🖥️  Serveur: {{ inventory_hostname }}
+              ⏰ Timestamp: {{ ansible_date_time.iso8601 }}
+              🔍 Détails: {{ ansible_failed_result | default('Erreur inconnue') }}
+              
+        - name: "📧 Notification d'échec"
+          include_tasks: tasks/notifications.yml
+          vars:
+            notification_type: "error"
+            message: "❌ Échec déploiement {{ current_version }} sur {{ inventory_hostname }}"
+          when: notifications_enabled | default(false)
+          
+        - name: "🔄 Déclenchement rollback automatique"
+          include_tasks: handlers/rollback.yml
+          when: rollback_enabled | default(true)
+          
+        - name: "📋 Génération rapport d'erreur"
+          template:
+            src: error-report.j2
+            dest: "{{ app_directory }}/logs/deployment-error-{{ deployment_timestamp }}.log"
+            owner: "{{ docker_user }}"
+            group: "{{ docker_group }}"
+            mode: '0644'
+          
+      always:
+        - name: "🧹 Nettoyage en cas d'erreur"
+          include_tasks: handlers/cleanup.yml

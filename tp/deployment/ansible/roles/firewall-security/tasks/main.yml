@@ -1,0 +1,171 @@
+# ==============================================================================
+# RÔLE FIREWALL-SECURITY - CONFIGURATION SÉCURITÉ ET FIREWALL
+# ==============================================================================
+
+---
+- name: "🔥 Installation du firewall UFW"
+  apt:
+    name: ufw
+    state: present
+    update_cache: true
+  when: ansible_distribution == 'Ubuntu'
+  tags: ['security', 'firewall']
+
+- name: "🔄 Reset des règles UFW existantes"
+  ufw:
+    state: reset
+  when: ansible_distribution == 'Ubuntu'
+  tags: ['security', 'firewall']
+
+- name: "🚫 Configuration par défaut - DENY incoming"
+  ufw:
+    default: deny
+    direction: incoming
+  when: ansible_distribution == 'Ubuntu'
+  tags: ['security', 'firewall']
+
+- name: "✅ Configuration par défaut - ALLOW outgoing"
+  ufw:
+    default: allow
+    direction: outgoing
+  when: ansible_distribution == 'Ubuntu'
+  tags: ['security', 'firewall']
+
+- name: "🚪 Configuration des ports autorisés"
+  ufw:
+    rule: "{{ item.rule }}"
+    port: "{{ item.port }}"
+    proto: "{{ item.proto | default('tcp') }}"
+    comment: "{{ item.comment | default('') }}"
+  loop: "{{ allowed_ports }}"
+  when: 
+    - ansible_distribution == 'Ubuntu'
+    - allowed_ports is defined
+  tags: ['security', 'firewall']
+
+- name: "🔒 Configuration des règles de limitation SSH"
+  ufw:
+    rule: limit
+    port: ssh
+    proto: tcp
+    comment: "Rate limit SSH connections"
+  when: ansible_distribution == 'Ubuntu'
+  tags: ['security', 'ssh']
+
+- name: "🌐 Autorisation des IPs spécifiques"
+  ufw:
+    rule: allow
+    from_ip: "{{ item }}"
+    comment: "Trusted IP range"
+  loop: "{{ allowed_ips | default([]) }}"
+  when: 
+    - ansible_distribution == 'Ubuntu'
+    - allowed_ips is defined
+    - allowed_ips | length > 0
+  tags: ['security', 'whitelist']
+
+- name: "🚫 Blocage des IPs malveillantes"
+  ufw:
+    rule: deny
+    from_ip: "{{ item }}"
+    comment: "Blocked IP"
+  loop: "{{ blocked_ips | default([]) }}"
+  when: 
+    - ansible_distribution == 'Ubuntu'
+    - blocked_ips is defined
+    - blocked_ips | length > 0
+  tags: ['security', 'blacklist']
+
+- name: "🔥 Activation du firewall UFW"
+  ufw:
+    state: enabled
+    logging: 'on'
+  when: ansible_distribution == 'Ubuntu'
+  notify: restart ufw
+  tags: ['security', 'firewall']
+
+# Configuration pour Debian (utilise iptables)
+- name: "🔥 Installation iptables-persistent pour Debian"
+  apt:
+    name: iptables-persistent
+    state: present
+  when: ansible_distribution == 'Debian'
+  tags: ['security', 'firewall']
+
+- name: "🛡️  Configuration SSH sécurisée"
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    backup: true
+  loop:
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin no' }
+    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication no' }
+    - { regexp: '^#?PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+    - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+    - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval 300' }
+    - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax 2' }
+  notify: restart ssh
+  tags: ['security', 'ssh']
+
+- name: "📝 Installation de fail2ban (optionnel)"
+  apt:
+    name: fail2ban
+    state: present
+  when: fail2ban_enabled | default(false)
+  tags: ['security', 'fail2ban']
+
+- name: "⚙️  Configuration de fail2ban"
+  template:
+    src: jail.local.j2
+    dest: /etc/fail2ban/jail.local
+    backup: true
+  when: fail2ban_enabled | default(false)
+  notify: restart fail2ban
+  tags: ['security', 'fail2ban']
+
+- name: "🔄 Configuration des mises à jour automatiques"
+  apt:
+    name: unattended-upgrades
+    state: present
+  when: automatic_updates.enabled | default(true)
+  tags: ['security', 'updates']
+
+- name: "⚙️  Configuration unattended-upgrades"
+  lineinfile:
+    path: /etc/apt/apt.conf.d/50unattended-upgrades
+    regexp: '^//Unattended-Upgrade::Automatic-Reboot'
+    line: 'Unattended-Upgrade::Automatic-Reboot "{{ automatic_updates.auto_reboot | default(false) | lower }}";'
+    backup: true
+  when: automatic_updates.enabled | default(true)
+  tags: ['security', 'updates']
+
+- name: "✅ Vérification de l'état du firewall"
+  command: ufw status verbose
+  register: firewall_status
+  changed_when: false
+  when: ansible_distribution == 'Ubuntu'
+  tags: ['security', 'verify']
+
+- name: "📊 Affichage de l'état du firewall"
+  debug:
+    msg: |
+      🔥 État du firewall UFW:
+      {{ firewall_status.stdout | default('Non disponible pour cette distribution') }}
+      ✅ Configuration sécurité terminée !
+  when: ansible_distribution == 'Ubuntu'
+  tags: ['security', 'verify']
+
+- name: "🔍 Vérification des ports ouverts"
+  command: netstat -tlnp
+  register: open_ports
+  changed_when: false
+  tags: ['security', 'audit']
+
+- name: "📋 Audit des ports ouverts"
+  debug:
+    msg: |
+      🔍 Ports ouverts sur le système:
+      {{ open_ports.stdout_lines | select('match', '.*:(' + (allowed_ports | map(attribute='port') | join('|')) + ').*') | list }}
+  tags: ['security', 'audit']

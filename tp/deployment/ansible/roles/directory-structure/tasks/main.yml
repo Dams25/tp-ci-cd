@@ -1,0 +1,175 @@
+# ==============================================================================
+# RÔLE DIRECTORY-STRUCTURE - CRÉATION STRUCTURE RÉPERTOIRES
+# ==============================================================================
+
+---
+- name: "📁 Création des répertoires principaux de l'application"
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0755'
+  loop: "{{ directories_to_create }}"
+  tags: ['directories', 'structure']
+
+- name: "📝 Création du répertoire de logs avec permissions spéciales"
+  file:
+    path: "/var/log/{{ app_name }}"
+    state: directory
+    owner: "{{ docker_user }}"
+    group: "adm"
+    mode: '0755'
+  tags: ['directories', 'logs']
+
+- name: "🔄 Configuration de la rotation des logs"
+  template:
+    src: logrotate.j2
+    dest: "/etc/logrotate.d/{{ app_name }}"
+    mode: '0644'
+  tags: ['directories', 'logs']
+
+- name: "📂 Création du répertoire pour les sauvegardes"
+  file:
+    path: "{{ app_directory }}/backups"
+    state: directory
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0700'
+  tags: ['directories', 'backup']
+
+- name: "⚙️  Création du répertoire de configuration"
+  file:
+    path: "{{ app_directory }}/config"
+    state: directory
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0755'
+  tags: ['directories', 'config']
+
+- name: "📊 Création du répertoire de monitoring"
+  file:
+    path: "{{ app_directory }}/monitoring"
+    state: directory
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0755'
+  when: monitoring_enabled | default(false)
+  tags: ['directories', 'monitoring']
+
+- name: "🗄️  Création du répertoire pour les données Docker volumes"
+  file:
+    path: "{{ app_directory }}/data/{{ item }}"
+    state: directory
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0755'
+  loop:
+    - mongodb
+    - nginx
+    - app
+  tags: ['directories', 'volumes']
+
+- name: "📋 Création d'un fichier README dans chaque répertoire"
+  copy:
+    content: |
+      # {{ item | basename | upper }} Directory
+      
+      Created by Ansible on {{ ansible_date_time.iso8601 }}
+      Owner: {{ docker_user }}
+      
+      Purpose: {{ directory_purposes[item | basename] | default('Application directory') }}
+      
+      ## Structure
+      ```
+      {{ item }}/
+      ├── README.md (this file)
+      {% if item | basename == 'config' %}
+      ├── .env                    # Environment variables
+      ├── docker-compose.yml      # Docker composition
+      └── nginx/                  # Nginx configuration
+      {% elif item | basename == 'data' %}
+      ├── mongodb/                # MongoDB data
+      ├── nginx/                  # Nginx data
+      └── app/                    # Application data
+      {% elif item | basename == 'logs' %}
+      ├── app.log                 # Application logs
+      ├── nginx_access.log        # Nginx access logs
+      ├── nginx_error.log         # Nginx error logs
+      └── mongodb.log             # MongoDB logs
+      {% elif item | basename == 'backups' %}
+      ├── daily/                  # Daily backups
+      ├── weekly/                 # Weekly backups
+      └── scripts/                # Backup scripts
+      {% elif item | basename == 'scripts' %}
+      ├── deploy.sh               # Deployment script
+      ├── backup.sh               # Backup script
+      └── maintenance.sh          # Maintenance script
+      {% endif %}
+      ```
+      
+      ## Permissions
+      - Owner: {{ docker_user }}:{{ docker_group }}
+      - Mode: 0755
+      
+      ## Maintenance
+      Last updated: {{ ansible_date_time.iso8601 }}
+    dest: "{{ item }}/README.md"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0644'
+    force: false
+  loop: "{{ directories_to_create }}"
+  vars:
+    directory_purposes:
+      config: "Configuration files and environment variables"
+      data: "Persistent data storage for containers"
+      logs: "Application and system logs"
+      backups: "Database and application backups"
+      scripts: "Utility and maintenance scripts"
+      monitoring: "Monitoring tools and configurations"
+  tags: ['directories', 'documentation']
+
+- name: "🔧 Création des scripts utilitaires de base"
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ app_directory }}/scripts/{{ item.dest }}"
+    owner: "{{ docker_user }}"
+    group: "{{ docker_group }}"
+    mode: '0755'
+  loop:
+    - { src: 'backup.sh.j2', dest: 'backup.sh' }
+    - { src: 'deploy.sh.j2', dest: 'deploy.sh' }
+    - { src: 'maintenance.sh.j2', dest: 'maintenance.sh' }
+  tags: ['directories', 'scripts']
+
+- name: "📊 Vérification de la structure créée"
+  command: "tree {{ app_directory }}"
+  register: directory_tree
+  changed_when: false
+  ignore_errors: true
+  tags: ['directories', 'verify']
+
+- name: "📋 Affichage de la structure des répertoires"
+  debug:
+    msg: |
+      📁 Structure des répertoires créée:
+      {{ directory_tree.stdout | default('Tree command not available') }}
+      
+      ✅ Répertoires configurés avec succès !
+      📍 Répertoire principal: {{ app_directory }}
+      👤 Propriétaire: {{ docker_user }}:{{ docker_group }}
+  tags: ['directories', 'verify']
+
+- name: "💾 Vérification de l'espace disque disponible"
+  shell: "df -h {{ app_directory }}"
+  register: disk_space
+  changed_when: false
+  tags: ['directories', 'verify']
+
+- name: "💾 Affichage de l'espace disque"
+  debug:
+    msg: |
+      💾 Espace disque pour {{ app_directory }}:
+      {{ disk_space.stdout }}
+  tags: ['directories', 'verify']

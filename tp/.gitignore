@@ -1,40 +1,200 @@
-# Node modules
-node_modules/
+# ==============================================================================
+# GITIGNORE - TODOLIST PRODUCTION
+# ==============================================================================
 
-# Environment variables
+# Environment variables (SECURITY)
+.env
+.env.local
+.env.*.local
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+.nyc_output
+.coverage
+
+# Grunt intermediate storage
+.grunt
+
+# node-waf configuration
+.lock-wscript
+
+# Compiled binary addons
+build/Release
+
+# Optional npm cache directory
+.npm
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# dotenv environment variables file
 .env
 
-# Build files
-/build
-/dist
-/.next
-/.nuxt
-/.idea
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
 
-# Dependency directories
-/.pnp
-.pnp.js
+# next.js build output
+.next
 
-# Testing libraries
-/coverage
+# nuxt.js build output
+.nuxt
 
-# macOS
+# vuepress build output
+.vuepress/dist
+
+# Serverless directories
+.serverless
+
+# FuseBox cache
+.fusebox/
+
+# DynamoDB Local files
+.dynamodb/
+
+# Docker
+.dockerignore.bak
+
+# IDE
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
-.AppleDouble
-.LSOverride
-
-# Windows
-Thumbs.db
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
 ehthumbs.db
+Thumbs.db
 
-# User-specific files
-*.sublime-project
-*.sublime-workspace
-*.komodoproject
-.komodotools
-.kate-swp
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# Yarn
-yarn-error.log
-.pnp/
-.pnp.js
+# Data directories
+data/
+uploads/
+temp/
+tmp/
+
+# Backup files
+*.bak
+*.backup
+*.tmp
+
+# Docker volumes
+docker-volumes/
+
+# Ansible
+deployment/ansible/inventory.ini
+deployment/ansible/vault_pass.txt
+deployment/ansible/group_vars/*/vault.yml
+
+# SSH Keys (if any)
+*.pem
+*.key
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+known_hosts
+deployment/ansible/ssh_keys/
+
+# Build artifacts
+dist/
+build/
+
+# Test artifacts
+test-results/
+coverage/
+
+# Cache
+.cache/
+.tmp/
+
+# ==============================================================================
+# SECURITY REINFORCEMENT - ADDITIONAL PATTERNS
+# ==============================================================================
+
+# Secrets and credentials (CRITICAL)
+secrets/
+credentials/
+*.secret
+*.credential
+*secret*
+*password*
+*token*
+auth.json
+config.json
+private.json
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+database.json
+
+# Certificates and keys (CRITICAL)
+*.crt
+*.cert
+*.ca-bundle
+*.p7b
+*.p7c
+*.pfx
+*.p12
+*.jks
+*.keystore
+*.truststore
+
+# Cloud provider files
+.aws/
+.azure/
+.gcp/
+service-account.json
+gcloud-service-key.json
+
+# CI/CD sensitive files
+.travis.yml.bak
+.github/workflows/*.secret
+deploy_key*
+deployment_key*
+
+# Package manager lock files (potential dependency disclosure)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# ==============================================================================
+# END SECURITY REINFORCEMENT
+# ==============================================================================

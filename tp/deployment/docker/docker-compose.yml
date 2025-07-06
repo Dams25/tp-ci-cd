@@ -1,0 +1,234 @@
+# ==============================================================================
+# DOCKER-COMPOSE PRODUCTION - TO-DO LIST APPLICATION
+# Architecture: App Node.js + MongoDB + Réseau isolé + Monitoring
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  # ==========================================
+  # APPLICATION NODE.JS TO-DO LIST
+  # ==========================================
+  todolist-app:
+    build:
+      context: ../../
+      dockerfile: deployment/docker/Dockerfile
+      target: production
+    image: todolist-app:production
+    container_name: todolist-app-prod
+    restart: unless-stopped
+    
+    # Variables d'environnement
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - MONGODB_URI=mongodb://mongodb:27017/${MONGO_INITDB_DATABASE}
+      - SESSION_SECRET=${SESSION_SECRET}
+      - START_MESSAGE=Production TO-DO App Started
+      
+    # Exposition du port
+    ports:
+      - "${APP_PORT:-3000}:3000"
+      
+    # Dépendances
+    depends_on:
+      mongodb:
+        condition: service_healthy
+        
+    # Réseau isolé
+    networks:
+      - todolist-internal
+      - todolist-external
+      
+    # Healthcheck application
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+      
+    # Configuration des logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        
+    # Limites de ressources
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+          
+    # Volumes pour optimisation
+    volumes:
+      - /app/node_modules  # Volume anonyme pour éviter l'écrasement
+
+  # ==========================================
+  # BASE DE DONNÉES MONGODB
+  # ==========================================
+  mongodb:
+    image: mongo:7-jammy
+    container_name: todolist-mongodb-prod
+    restart: unless-stopped
+    
+    # Variables d'environnement sécurisées
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD}
+      - MONGO_INITDB_DATABASE=${MONGO_INITDB_DATABASE}
+      
+    # Pas d'exposition externe (sécurité)
+    expose:
+      - "27017"
+      
+    # Réseau interne uniquement
+    networks:
+      - todolist-internal
+      
+    # Persistance des données
+    volumes:
+      - mongodb-data:/data/db
+      - mongodb-config:/data/configdb
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+      
+    # Healthcheck MongoDB
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+      
+    # Configuration des logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+        
+    # Limites de ressources
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # ==========================================
+  # REVERSE PROXY NGINX (OPTIONNEL)
+  # ==========================================
+  nginx:
+    image: nginx:alpine
+    container_name: todolist-nginx-prod
+    restart: unless-stopped
+    
+    # Exposition publique
+    ports:
+      - "${NGINX_HTTP_PORT:-80}:80"
+      - "${NGINX_HTTPS_PORT:-443}:443"
+      
+    # Configuration Nginx
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - nginx-logs:/var/log/nginx
+      
+    # Dépendances
+    depends_on:
+      todolist-app:
+        condition: service_healthy
+        
+    # Réseau externe uniquement
+    networks:
+      - todolist-external
+      
+    # Healthcheck Nginx
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      
+    # Logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================
+  # MONITORING - HEALTHCHECK SERVICE
+  # ==========================================
+  healthcheck:
+    image: curlimages/curl:latest
+    container_name: todolist-healthcheck
+    restart: unless-stopped
+    
+    # Script de monitoring périodique
+    command: >
+      sh -c "
+        while true; do
+          echo '[HEALTH] Checking application status...'
+          if curl -f http://todolist-app:3000/health > /dev/null 2>&1; then
+            echo '[HEALTH] ✅ Application is healthy'
+          else
+            echo '[HEALTH] ❌ Application is unhealthy'
+          fi
+          sleep 60
+        done
+      "
+      
+    # Réseau interne
+    networks:
+      - todolist-internal
+      
+    # Dépendances
+    depends_on:
+      - todolist-app
+
+# ==============================================================================
+# RÉSEAUX ISOLÉS
+# ==============================================================================
+networks:
+  # Réseau interne : App <-> MongoDB (sécurisé)
+  todolist-internal:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+          
+  # Réseau externe : Nginx <-> App (exposition publique)
+  todolist-external:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+
+# ==============================================================================
+# VOLUMES PERSISTANTS
+# ==============================================================================
+volumes:
+  # Données MongoDB persistantes
+  mongodb-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_PATH:-./data}/mongodb
+      
+  # Configuration MongoDB
+  mongodb-config:
+    driver: local
+    
+  # Logs Nginx
+  nginx-logs:
+    driver: local

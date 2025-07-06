@@ -1,0 +1,369 @@
+# ============================================
+# ROLE: health-checks
+# DESCRIPTION: Tests de santé complets et monitoring post-déploiement
+# VERSION: 1.0
+# ============================================
+
+---
+- name: "🏥 Début des tests de santé"
+  debug:
+    msg: "Lancement des health checks pour {{ app_name }} version {{ app_version }}"
+
+# Initialisation des variables de test
+- name: "⚙️ Initialisation des tests de santé"
+  set_fact:
+    health_checks_start_time: "{{ ansible_date_time.epoch }}"
+    failed_checks: []
+    passed_checks: []
+    test_results: {}
+
+# Tests de base du système
+- name: "🔧 Tests de santé système"
+  block:
+    - name: "Test de disponibilité des ports"
+      wait_for:
+        port: "{{ item.port }}"
+        host: "{{ item.host | default('localhost') }}"
+        timeout: "{{ item.timeout | default(30) }}"
+        msg: "Port {{ item.port }} non accessible"
+      loop: "{{ health_checks.ports }}"
+      register: port_tests
+
+    - name: "Test de l'usage CPU"
+      shell: top -bn1 | grep "Cpu(s)" | awk '{print $2}' | awk -F'%' '{print $1}'
+      register: cpu_usage
+      changed_when: false
+
+    - name: "Test de l'usage mémoire"
+      shell: free | grep Mem | awk '{printf "%.1f", $3/$2 * 100.0}'
+      register: memory_usage
+      changed_when: false
+
+    - name: "Test de l'espace disque"
+      shell: df {{ app_directory }} | tail -1 | awk '{print $5}' | sed 's/%//'
+      register: disk_usage
+      changed_when: false
+
+    - name: "Validation des ressources système"
+      assert:
+        that:
+          - cpu_usage.stdout | float < health_checks.thresholds.cpu_max | default(80)
+          - memory_usage.stdout | float < health_checks.thresholds.memory_max | default(85)
+          - disk_usage.stdout | int < health_checks.thresholds.disk_max | default(90)
+        fail_msg: "Ressources système insuffisantes - CPU: {{ cpu_usage.stdout }}%, Mem: {{ memory_usage.stdout }}%, Disk: {{ disk_usage.stdout }}%"
+        success_msg: "Ressources système OK - CPU: {{ cpu_usage.stdout }}%, Mem: {{ memory_usage.stdout }}%, Disk: {{ disk_usage.stdout }}%"
+  tags:
+    - health-checks
+    - system
+
+# Tests de santé des containers Docker
+- name: "🐳 Tests de santé des containers"
+  block:
+    - name: "Vérification du statut des containers"
+      shell: docker-compose -f {{ app_directory }}/docker-compose.yml ps --format json
+      register: containers_status
+      changed_when: false
+
+    - name: "Parse du statut des containers"
+      set_fact:
+        containers_info: "{{ containers_status.stdout | from_json }}"
+
+    - name: "Validation des containers en cours d'exécution"
+      assert:
+        that:
+          - item.State == "running"
+        fail_msg: "Container {{ item.Name }} n'est pas en cours d'exécution: {{ item.State }}"
+        success_msg: "Container {{ item.Name }} fonctionne correctement"
+      loop: "{{ containers_info }}"
+      loop_control:
+        label: "{{ item.Name }}"
+
+    - name: "Test des logs des containers"
+      shell: |
+        docker logs --tail=50 {{ item.Name }} 2>&1 | grep -i error || true
+      register: container_logs
+      loop: "{{ containers_info }}"
+      loop_control:
+        label: "{{ item.Name }}"
+      changed_when: false
+
+    - name: "Vérification de l'absence d'erreurs critiques"
+      assert:
+        that:
+          - "'FATAL' not in item.stdout"
+          - "'CRITICAL' not in item.stdout"
+        fail_msg: "Erreurs critiques détectées dans {{ item.item.Name }}"
+        success_msg: "Aucune erreur critique dans {{ item.item.Name }}"
+      loop: "{{ container_logs.results }}"
+      loop_control:
+        label: "{{ item.item.Name }}"
+      when: item.stdout != ""
+  tags:
+    - health-checks
+    - containers
+
+# Tests de santé de l'application
+- name: "🌐 Tests de santé de l'application"
+  block:
+    - name: "Test de l'endpoint de santé principal"
+      uri:
+        url: "http://localhost:{{ deployment.app_port | default(3000) }}/health"
+        method: GET
+        timeout: "{{ health_checks.timeout | default(10) }}"
+        status_code: 200
+      register: main_health_check
+      retries: "{{ health_checks.retries | default(5) }}"
+      delay: "{{ health_checks.delay | default(10) }}"
+
+    - name: "Test de réactivité de l'application"
+      uri:
+        url: "http://localhost:{{ deployment.app_port | default(3000) }}/"
+        method: GET
+        timeout: "{{ health_checks.timeout | default(10) }}"
+        return_content: true
+      register: app_response_test
+
+    - name: "Mesure du temps de réponse"
+      uri:
+        url: "http://localhost:{{ deployment.app_port | default(3000) }}/health"
+        method: GET
+        timeout: "{{ health_checks.timeout | default(10) }}"
+      register: response_time_test
+      vars:
+        start_time: "{{ ansible_date_time.epoch }}"
+
+    - name: "Validation du temps de réponse"
+      assert:
+        that:
+          - (ansible_date_time.epoch | int - start_time | int) < health_checks.thresholds.response_time_max | default(5)
+        fail_msg: "Temps de réponse trop élevé"
+        success_msg: "Temps de réponse acceptable"
+
+    - name: "Test des endpoints critiques"
+      uri:
+        url: "http://localhost:{{ deployment.app_port | default(3000) }}{{ item.path }}"
+        method: "{{ item.method | default('GET') }}"
+        timeout: "{{ health_checks.timeout | default(10) }}"
+        status_code: "{{ item.expected_status | default([200, 201, 204]) }}"
+        headers: "{{ item.headers | default({}) }}"
+        body: "{{ item.body | default(omit) }}"
+        body_format: "{{ item.body_format | default('json') if item.body is defined else omit }}"
+      loop: "{{ health_checks.endpoints | default([]) }}"
+      register: endpoints_tests
+      when: health_checks.endpoints is defined
+  tags:
+    - health-checks
+    - application
+
+# Tests de santé de la base de données
+- name: "🗄️ Tests de santé MongoDB"
+  block:
+    - name: "Test de connectivité MongoDB"
+      shell: |
+        docker exec $(docker-compose -f {{ app_directory }}/docker-compose.yml ps -q mongo) \
+        mongo --eval "db.adminCommand('ping')" --quiet
+      register: mongo_ping_test
+      retries: 3
+      delay: 5
+
+    - name: "Test de performance MongoDB"
+      shell: |
+        docker exec $(docker-compose -f {{ app_directory }}/docker-compose.yml ps -q mongo) \
+        mongo {{ secrets.mongodb.database }} --eval "
+        var start = new Date();
+        db.tasks.findOne();
+        var end = new Date();
+        print('Query time: ' + (end - start) + 'ms');
+        " --quiet
+      register: mongo_performance_test
+      changed_when: false
+
+    - name: "Vérification de l'espace de stockage MongoDB"
+      shell: |
+        docker exec $(docker-compose -f {{ app_directory }}/docker-compose.yml ps -q mongo) \
+        mongo {{ secrets.mongodb.database }} --eval "db.stats().storageSize" --quiet
+      register: mongo_storage_test
+      changed_when: false
+
+    - name: "Test de réplication MongoDB (si activée)"
+      shell: |
+        docker exec $(docker-compose -f {{ app_directory }}/docker-compose.yml ps -q mongo) \
+        mongo --eval "rs.status()" --quiet
+      register: mongo_replication_test
+      when: mongodb.replication.enabled | default(false)
+      failed_when: false
+      changed_when: false
+  tags:
+    - health-checks
+    - database
+
+# Tests fonctionnels complets
+- name: "🧪 Tests fonctionnels de l'application"
+  block:
+    - name: "Test de création d'une tâche"
+      uri:
+        url: "http://localhost:{{ deployment.app_port | default(3000) }}/api/tasks"
+        method: POST
+        timeout: "{{ health_checks.timeout | default(10) }}"
+        body_format: json
+        body:
+          title: "Test Health Check {{ ansible_date_time.epoch }}"
+          description: "Tâche de test créée automatiquement"
+          completed: false
+        status_code: [201, 200]
+      register: task_creation_test
+
+    - name: "Test de lecture des tâches"
+      uri:
+        url: "http://localhost:{{ deployment.app_port | default(3000) }}/api/tasks"
+        method: GET
+        timeout: "{{ health_checks.timeout | default(10) }}"
+        status_code: 200
+      register: task_reading_test
+
+    - name: "Validation de la structure de réponse"
+      assert:
+        that:
+          - task_reading_test.json is defined
+          - task_reading_test.json is iterable
+        fail_msg: "Structure de réponse API invalide"
+        success_msg: "Structure de réponse API valide"
+
+    - name: "Test de mise à jour d'une tâche"
+      uri:
+        url: "http://localhost:{{ deployment.app_port | default(3000) }}/api/tasks/{{ task_creation_test.json.id | default(task_creation_test.json._id) }}"
+        method: PUT
+        timeout: "{{ health_checks.timeout | default(10) }}"
+        body_format: json
+        body:
+          completed: true
+        status_code: [200, 204]
+      register: task_update_test
+      when: task_creation_test.json.id is defined or task_creation_test.json._id is defined
+
+    - name: "Nettoyage de la tâche de test"
+      uri:
+        url: "http://localhost:{{ deployment.app_port | default(3000) }}/api/tasks/{{ task_creation_test.json.id | default(task_creation_test.json._id) }}"
+        method: DELETE
+        timeout: "{{ health_checks.timeout | default(10) }}"
+        status_code: [200, 204, 404]
+      when: task_creation_test.json.id is defined or task_creation_test.json._id is defined
+      ignore_errors: true
+  tags:
+    - health-checks
+    - functional
+
+# Tests de charge basiques
+- name: "⚡ Tests de charge basiques"
+  block:
+    - name: "Test de charge avec curl"
+      shell: |
+        for i in {1..{{ health_checks.load_test.concurrent_requests | default(10) }}}; do
+          curl -s -o /dev/null -w "%{http_code} %{time_total}\n" \
+            http://localhost:{{ deployment.app_port | default(3000) }}/health &
+        done
+        wait
+      register: load_test_results
+      when: health_checks.load_test.enabled | default(false)
+
+    - name: "Analyse des résultats de charge"
+      set_fact:
+        load_test_success_rate: >-
+          {{
+            (load_test_results.stdout_lines | select('match', '^200 .*') | list | length) /
+            (load_test_results.stdout_lines | length) * 100
+          }}
+      when: health_checks.load_test.enabled | default(false)
+
+    - name: "Validation du taux de succès"
+      assert:
+        that:
+          - load_test_success_rate | float >= health_checks.load_test.min_success_rate | default(95)
+        fail_msg: "Taux de succès insuffisant: {{ load_test_success_rate }}%"
+        success_msg: "Taux de succès acceptable: {{ load_test_success_rate }}%"
+      when: health_checks.load_test.enabled | default(false)
+  tags:
+    - health-checks
+    - load
+
+# Compilation des résultats
+- name: "📊 Compilation des résultats de santé"
+  block:
+    - name: "Calcul du score de santé global"
+      set_fact:
+        health_score: >-
+          {{
+            (
+              (port_tests.results | selectattr('failed', 'undefined') | list | length) +
+              (main_health_check.status == 200) | int +
+              (mongo_ping_test.rc == 0) | int +
+              (task_creation_test.status in [200, 201]) | int +
+              (task_reading_test.status == 200) | int
+            ) / 5 * 100
+          }}
+
+    - name: "Génération du rapport de santé détaillé"
+      template:
+        src: health-report.txt.j2
+        dest: "{{ app_directory }}/logs/health-report-{{ ansible_date_time.epoch }}.txt"
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0644'
+      vars:
+        health_score: "{{ health_score }}"
+        total_duration: "{{ ansible_date_time.epoch | int - health_checks_start_time | int }}"
+        system_resources:
+          cpu: "{{ cpu_usage.stdout }}"
+          memory: "{{ memory_usage.stdout }}"
+          disk: "{{ disk_usage.stdout }}"
+        containers_count: "{{ containers_info | length }}"
+        response_time: "{{ (ansible_date_time.epoch | int - start_time | int) if start_time is defined else 'N/A' }}"
+
+    - name: "Validation du score de santé global"
+      assert:
+        that:
+          - health_score | float >= health_checks.thresholds.min_health_score | default(80)
+        fail_msg: "Score de santé insuffisant: {{ health_score }}%"
+        success_msg: "Score de santé excellent: {{ health_score }}%"
+  tags:
+    - health-checks
+    - reporting
+
+# Génération des métriques pour monitoring
+- name: "📈 Export des métriques pour monitoring"
+  block:
+    - name: "Génération des métriques Prometheus"
+      template:
+        src: prometheus-metrics.txt.j2
+        dest: "{{ app_directory }}/monitoring/metrics-{{ ansible_date_time.epoch }}.prom"
+        owner: "{{ docker_user }}"
+        group: "{{ docker_group }}"
+        mode: '0644'
+      when: monitoring.prometheus_enabled | default(false)
+
+    - name: "Envoi des métriques vers InfluxDB"
+      uri:
+        url: "{{ monitoring.influxdb_url }}/write?db={{ monitoring.influxdb_database }}"
+        method: POST
+        body: |
+          health_score,host={{ ansible_hostname }},app={{ app_name }} value={{ health_score }}
+          response_time,host={{ ansible_hostname }},app={{ app_name }} value={{ (ansible_date_time.epoch | int - start_time | int) if start_time is defined else 0 }}
+          cpu_usage,host={{ ansible_hostname }} value={{ cpu_usage.stdout }}
+          memory_usage,host={{ ansible_hostname }} value={{ memory_usage.stdout }}
+      when: monitoring.influxdb_enabled | default(false)
+      ignore_errors: true
+  tags:
+    - health-checks
+    - metrics
+
+- name: "✅ Tests de santé terminés"
+  debug:
+    msg: "Tests de santé terminés - Score global: {{ health_score }}%"
+
+# Déclenchement des alertes si nécessaire
+- name: "🚨 Gestion des alertes"
+  debug:
+    msg: "ALERTE: Score de santé critique ({{ health_score }}%)"
+  when: health_score | float < health_checks.thresholds.critical_threshold | default(70)
+  notify:
+    - send health alert

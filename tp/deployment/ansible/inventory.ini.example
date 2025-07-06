@@ -1,0 +1,63 @@
+# ==============================================================================
+# EXEMPLE D'INVENTAIRE - COPIER VERS inventory.ini ET ADAPTER
+# ==============================================================================
+
+[docker_servers]
+# 🌐 Serveurs de production - REMPLACEZ LES VALEURS
+production-server ansible_host=192.168.1.100 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+staging-server    ansible_host=192.168.1.101 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+# 🧪 Serveurs de développement
+[development_servers]
+dev-server        ansible_host=192.168.1.102 ansible_user=ubuntu ansible_ssh_private_key_file=~/.ssh/id_rsa
+local-vm          ansible_host=localhost      ansible_user=vagrant ansible_connection=local
+
+# ⚙️ Variables par groupe
+[docker_servers:vars]
+# Configuration SSH
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+ansible_python_interpreter=/usr/bin/python3
+
+# Configuration Docker et Application
+docker_user=deploy
+app_directory=/opt/todolist
+app_name=todolist-production
+
+# Sécurité
+firewall_enabled=true
+update_system=true
+
+# Monitoring (optionnel)
+monitoring_enabled=false
+cadvisor_enabled=false
+prometheus_monitoring=false
+
+# Ports de l'application
+app_ports=[3000, 4000, 80, 443]
+ssh_port=22
+
+# ==============================================================================
+# INSTRUCTIONS D'UTILISATION
+# ==============================================================================
+#
+# 1. Copiez ce fichier vers inventory.ini :
+#    cp inventory.ini.example inventory.ini
+#
+# 2. Modifiez les valeurs suivantes :
+#    - ansible_host : Adresse IP de vos serveurs
+#    - ansible_user : Utilisateur SSH (ubuntu, debian, etc.)
+#    - ansible_ssh_private_key_file : Chemin vers votre clé SSH
+#
+# 3. Adaptez les variables selon vos besoins :
+#    - docker_user : Nom de l'utilisateur Docker
+#    - app_directory : Répertoire d'installation
+#    - firewall_enabled : true/false selon vos besoins
+#    - monitoring_enabled : true pour activer le monitoring
+#
+# 4. Testez la connectivité :
+#    ansible docker_servers -i inventory.ini -m ping
+#
+# 5. Lancez l'installation :
+#    ansible-playbook -i inventory.ini playbook-infrastructure.yml
+#
+# ==============================================================================
